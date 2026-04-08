@@ -70,6 +70,9 @@ export default function ChatContainer() {
   const [info, setInfo] = useState<SubjectInfo>({})
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  /** ID of the assistant message that contains the completed report */
+  const [completedMsgId, setCompletedMsgId] = useState<string | null>(null)
+
   const { isRunning, runCheck, cancel } = useReferenceCheck()
 
   // Abort any in-progress stream when this component unmounts
@@ -117,8 +120,9 @@ export default function ChatContainer() {
               return next
             })
           },
-          onComplete: (_msgId) => {
-            // Status is already set to done by the hook; nothing extra needed
+          onComplete: (msgId) => {
+            // Mark this message as the completed report
+            setCompletedMsgId(msgId)
           },
           onError: (msgId, errorMsg) => {
             // Replace the placeholder with the error message
@@ -234,7 +238,12 @@ export default function ChatContainer() {
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto">
           {messages.map((msg) => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage
+              key={msg.id}
+              message={msg}
+              isCompleted={msg.id === completedMsgId}
+              personName={info.name}
+            />
           ))}
           <div ref={bottomRef} />
         </div>
