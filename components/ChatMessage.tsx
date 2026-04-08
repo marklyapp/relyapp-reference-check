@@ -1,5 +1,8 @@
 'use client'
 
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
 export type MessageRole = 'user' | 'assistant'
 
 export interface Message {
@@ -31,12 +34,29 @@ export default function ChatMessage({ message }: ChatMessageProps) {
               : 'bg-gray-100 text-gray-800 rounded-bl-sm border border-gray-200'
           }`}
         >
-          {message.content.split('\n').map((line, i) => (
-            <span key={i}>
-              {line}
-              {i < message.content.split('\n').length - 1 && <br />}
-            </span>
-          ))}
+          {isUser ? (
+            message.content.split('\n').map((line, i, arr) => (
+              <span key={i}>
+                {line}
+                {i < arr.length - 1 && <br />}
+              </span>
+            ))
+          ) : (
+            <div className="prose prose-sm prose-gray max-w-none prose-a:text-blue-600 prose-code:bg-gray-200 prose-code:px-1 prose-code:rounded prose-pre:bg-gray-200">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          )}
         </div>
         <span className="text-xs text-gray-400 mt-1 px-1">
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
