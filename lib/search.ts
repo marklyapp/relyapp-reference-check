@@ -26,6 +26,10 @@ export interface SearchPersonResult {
   errors: { source: string; query: string; error: string }[];
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 // ─── Search term generation ───────────────────────────────────────────────────
 
 /**
@@ -74,26 +78,29 @@ interface SourceDescriptor {
 }
 
 function sources(input: SearchPersonInput): SourceDescriptor[] {
-  const nameBase = buildNameQuery(input);
-
   return [
     // ── Elections AB ──────────────────────────────────────────────────────────
     {
       source: 'Elections AB – contributor (quarterly/annual)',
       buildQuery: (i) =>
-        `${buildNameQuery(i)} site:elections.ab.ca "contributor" OR "donor" OR "campaign finance"`,
+        `(${buildNameQuery(i)}) (site:elections.ab.ca) ("contributor" OR "donor" OR "campaign finance")`,
     },
     {
       source: 'Elections AB – leadership/nomination/third-party',
       buildQuery: (i) =>
-        `${buildNameQuery(i)} site:elections.ab.ca "leadership" OR "nomination" OR "third-party advertising"`,
+        `(${buildNameQuery(i)}) (site:elections.ab.ca) ("leadership" OR "nomination" OR "third-party advertising")`,
     },
 
     // ── Elections Canada ──────────────────────────────────────────────────────
     {
       source: 'Elections Canada – donation database',
       buildQuery: (i) =>
-        `${buildNameQuery(i)} site:elections.ca OR site:open.canada.ca "political contribution" OR "donation" OR "contributor"`,
+        `(${buildNameQuery(i)}) (site:elections.ca OR site:open.canada.ca) ("political contribution" OR "donation" OR "contributor")`,
+    },
+    {
+      source: 'Elections Canada – candidate/party expenditure reports',
+      buildQuery: (i) =>
+        `(${buildNameQuery(i)}) (site:elections.ca OR site:open.canada.ca) ("candidate" OR "party expenditure" OR "election expense" OR "financial return")`,
     },
 
     // ── CanLii ────────────────────────────────────────────────────────────────
@@ -138,12 +145,12 @@ function sources(input: SearchPersonInput): SourceDescriptor[] {
     // ── Twitter / X ───────────────────────────────────────────────────────────
     {
       source: 'Twitter/X – tweets & replies',
-      buildQuery: (i) => `${buildNameQuery(i)} site:twitter.com OR site:x.com`,
+      buildQuery: (i) => `(${buildNameQuery(i)}) (site:twitter.com OR site:x.com)`,
     },
     {
       source: 'Twitter/X – media & following',
       buildQuery: (i) =>
-        `${buildNameQuery(i)} site:twitter.com OR site:x.com "media" OR "following" OR "followers"`,
+        `(${buildNameQuery(i)}) (site:twitter.com OR site:x.com) ("media" OR "following" OR "followers")`,
     },
 
     // ── Facebook ──────────────────────────────────────────────────────────────
@@ -253,8 +260,9 @@ async function searchViaBraveAPI(query: string, apiKey: string): Promise<SearchR
  * based on `SEARCH_API_PROVIDER` config.
  *
  * Each source generates a targeted query using name variations + site filters.
- * Results and errors are returned together — errors for individual sources do
- * not abort the overall search.
+ * Results are deduplicated by URL before returning.
+ * A 300 ms delay is inserted between requests to respect API rate limits.
+ * Errors for individual sources do not abort the overall search.
  *
  * @example
  * const result = await searchPerson({
@@ -291,12 +299,23 @@ export async function searchPerson(input: SearchPersonInput): Promise<SearchPers
         error: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // Rate-limit: avoid 429s on SerpAPI/Brave free tiers
+    await sleep(300);
   }
+
+  // Deduplicate results by URL
+  const seen = new Set<string>();
+  const deduped = allResults.filter((r) => {
+    if (!r.url || seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  });
 
   return {
     input,
     queries,
-    results: allResults,
+    results: deduped,
     errors: allErrors,
   };
 }

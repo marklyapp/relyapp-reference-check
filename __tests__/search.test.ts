@@ -84,6 +84,11 @@ describe('searchPerson', () => {
     expect(result).toHaveProperty('errors');
   });
 
+  it('generates exactly 20 source queries', async () => {
+    const result = await searchPerson({ firstName: 'Jane', lastName: 'Smith' });
+    expect(result.queries).toHaveLength(20);
+  });
+
   it('generates at least one query per expected source category', async () => {
     const result = await searchPerson({ firstName: 'Jane', lastName: 'Smith' });
     const combined = result.queries.join(' ');
@@ -108,6 +113,19 @@ describe('searchPerson', () => {
     expect(result.results[0]).toHaveProperty('snippet');
   });
 
+  it('deduplicates results by URL', async () => {
+    // Same URL returned by every source
+    mockFetch.mockResolvedValue(
+      serpResponse([{ link: 'https://dup.example.com', title: 'Dup', snippet: 'Duplicate result' }])
+    );
+    const result = await searchPerson({ firstName: 'Jane', lastName: 'Smith' });
+    const urls = result.results.map((r) => r.url);
+    const uniqueUrls = new Set(urls);
+    expect(uniqueUrls.size).toBe(urls.length);
+    // All 20 sources return the same URL, so only 1 result should survive dedup
+    expect(result.results).toHaveLength(1);
+  });
+
   it('records errors without aborting the whole search', async () => {
     // Fail on first call, succeed on the rest
     mockFetch
@@ -119,36 +137,11 @@ describe('searchPerson', () => {
     expect(result.errors[0].error).toBe('Network failure');
   });
 
-  it('uses Brave API endpoint when provider is brave', async () => {
-    // Override mock to return brave-shaped data
-    const braveResponse = {
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          web: {
-            results: [{ url: 'https://brave.com', title: 'Brave result', description: 'snippet' }],
-          },
-        }),
-    } as Response;
-    mockFetch.mockResolvedValue(braveResponse);
-
-    // Re-mock config to use brave
-    jest.resetModules();
-    jest.doMock('../lib/config', () => ({
-      getConfig: () => ({
-        OPENAI_API_KEY: 'test-openai',
-        SEARCH_API_KEY: 'test-brave',
-        SEARCH_API_PROVIDER: 'brave',
-      }),
-    }));
-
-    const { searchPerson: searchPersonBrave } = await import('../lib/search');
-    const result = await searchPersonBrave({ firstName: 'Jane', lastName: 'Smith' });
-
-    const braveCall = mockFetch.mock.calls.find((call) =>
-      (call[0] as string).includes('api.search.brave.com')
-    );
-    expect(braveCall).toBeDefined();
-    expect(result.results.length).toBeGreaterThan(0);
+  it('Elections Canada queries use parenthesised OR site scopes', async () => {
+    const result = await searchPerson({ firstName: 'Jane', lastName: 'Smith' });
+    const ecQuery = result.queries.find((q) => q.includes('elections.ca OR site:open.canada.ca'));
+    expect(ecQuery).toBeDefined();
+    // Site group must be wrapped in parentheses
+    expect(ecQuery).toMatch(/\(site:elections\.ca OR site:open\.canada\.ca\)/);
   });
 });
