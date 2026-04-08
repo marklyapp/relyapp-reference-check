@@ -65,9 +65,9 @@ function getCollectionConfirmation(info: SubjectInfo): string {
   if (info.usernames && info.usernames.toLowerCase() !== 'skip') lines.push(`Usernames/Emails: ${info.usernames}`)
 
   return (
-    "Thank you. Here\'s a summary of the information collected:\\n\\n" +
-    lines.join('\\n') +
-    '\\n\\nStarting the reference check now\u2026'
+    "Thank you. Here\'s a summary of the information collected:\n\n" +
+    lines.join('\n') +
+    '\n\nStarting the reference check now\u2026'
   )
 }
 
