@@ -51,12 +51,17 @@ function assistantMsg(content: string): Message {
 /**
  * Normalise the collected SubjectInfo into a CheckRequestBody.
  * Fields containing only "skip" (case-insensitive) are omitted.
+ * Uses separate named fields for name and linkedinUrl to avoid ambiguity.
  */
 function buildRequestBody(input: ReferenceCheckInput): Record<string, unknown> {
   const isSkip = (v?: string) => !v || /^skip$/i.test(v.trim())
 
   const body: Record<string, unknown> = {
-    input: input.linkedin && !isSkip(input.linkedin) ? input.linkedin : input.name,
+    name: input.name,
+  }
+
+  if (input.linkedin && !isSkip(input.linkedin)) {
+    body.linkedinUrl = input.linkedin
   }
 
   if (!isSkip(input.location)) body.location = input.location
@@ -92,6 +97,9 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
     ) => {
       const msgId = makeId()
 
+      // AbortController lets us cancel the fetch if the component unmounts
+      const controller = new AbortController()
+
       // --- Search phase: show loading indicator ---
       setStatus('searching')
       callbacks.onStart(
@@ -105,8 +113,10 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(buildRequestBody(input)),
+          signal: controller.signal,
         })
       } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return
         setStatus('error')
         const errDetail = err instanceof Error ? err.message : 'Network error'
         callbacks.onError(
@@ -150,66 +160,80 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
         return
       }
 
+      // Cancel the stream reader when the AbortController fires (component unmount)
+      controller.signal.addEventListener('abort', () => {
+        reader.cancel().catch(() => {})
+      })
+
       const decoder = new TextDecoder()
       let buffer = ''
-      let firstChunk = true
+
+      /**
+       * Process all complete SSE lines currently in `buffer`.
+       * Returns true if [DONE] was received (caller should stop the loop).
+       */
+      function processBuffer(): boolean {
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6).trim()
+
+          if (payload === '[DONE]') {
+            setStatus('done')
+            callbacks.onComplete(msgId)
+            return true
+          }
+
+          try {
+            const parsed = JSON.parse(payload) as { text?: string; error?: string }
+
+            if (parsed.error) {
+              setStatus('error')
+              callbacks.onError(
+                msgId,
+                assistantMsg(
+                  `⚠️ An error occurred while generating the report.\n\n*${parsed.error}*`
+                )
+              )
+              return true
+            }
+
+            if (parsed.text) {
+              callbacks.onChunk(msgId, parsed.text)
+            }
+          } catch {
+            // Non-JSON SSE data — ignore
+          }
+        }
+
+        return false
+      }
 
       try {
         // eslint-disable-next-line no-constant-condition
         while (true) {
           const { done, value } = await reader.read()
-          if (done) break
+
+          if (done) {
+            // Flush any remaining content in the buffer before completing
+            if (buffer.trim()) {
+              processBuffer()
+            }
+            break
+          }
 
           buffer += decoder.decode(value, { stream: true })
 
-          // Process complete SSE lines
-          const lines = buffer.split('\n')
-          // Keep the last (potentially incomplete) line in the buffer
-          buffer = lines.pop() ?? ''
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            const payload = line.slice(6).trim()
-
-            if (payload === '[DONE]') {
-              setStatus('done')
-              callbacks.onComplete(msgId)
-              return
-            }
-
-            try {
-              const parsed = JSON.parse(payload) as { text?: string; error?: string }
-
-              if (parsed.error) {
-                setStatus('error')
-                callbacks.onError(
-                  msgId,
-                  assistantMsg(
-                    `⚠️ An error occurred while generating the report.\n\n*${parsed.error}*`
-                  )
-                )
-                return
-              }
-
-              if (parsed.text) {
-                if (firstChunk) {
-                  // Replace the loading placeholder with the first real chunk
-                  firstChunk = false
-                  callbacks.onChunk(msgId, parsed.text)
-                } else {
-                  callbacks.onChunk(msgId, parsed.text)
-                }
-              }
-            } catch {
-              // Non-JSON SSE data — ignore
-            }
-          }
+          if (processBuffer()) return
         }
 
         // Stream ended without [DONE] — treat as complete
         setStatus('done')
         callbacks.onComplete(msgId)
       } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return
         setStatus('error')
         const errDetail = err instanceof Error ? err.message : 'Stream read error'
         callbacks.onError(
