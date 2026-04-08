@@ -1,11 +1,11 @@
+'use client'
+
 /**
  * hooks/useHistory.ts
  * Manages reference check history stored in localStorage.
  *
  * refs #12
  */
-
-'use client'
 
 import { useState, useCallback, useEffect } from 'react'
 
