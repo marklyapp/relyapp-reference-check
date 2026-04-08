@@ -19,6 +19,8 @@ interface ChatMessageProps {
   isCompleted?: boolean
   /** Subject's name — used to generate the download filename */
   personName?: string
+  /** Optional retry callback — called with the message id when the user requests a retry */
+  onRetry?: (messageId: string) => void
 }
 
 /**
@@ -54,7 +56,7 @@ function sanitiseName(name: string): string {
     .replace(/[^a-z0-9-]/g, '')
 }
 
-export default function ChatMessage({ message, isCompleted, personName }: ChatMessageProps) {
+export default function ChatMessage({ message, isCompleted, personName, onRetry }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const showDownload = !isUser && isCompleted && !!personName
 
@@ -133,6 +135,15 @@ export default function ChatMessage({ message, isCompleted, personName }: ChatMe
                 />
               </svg>
               Download .docx
+            </button>
+          )}
+          {onRetry && !isUser && (
+            <button
+              onClick={() => onRetry(message.id)}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs text-gray-400 hover:text-gray-600 transition-colors"
+              title="Retry"
+            >
+              ↺ Retry
             </button>
           )}
         </div>
