@@ -10,10 +10,13 @@
     "test": "jest"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "next": "14.2.29",
     "openai": "^6.33.0",
     "react": "^18",
     "react-dom": "^18",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
