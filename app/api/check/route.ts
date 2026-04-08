@@ -9,7 +9,7 @@
  *  4. Generate a streaming report via generateReport()
  *  5. Return an SSE stream (text/event-stream)
  *
- * refs #7
+ * refs #7, #13
  */
 
 import { NextRequest } from "next/server";
@@ -21,8 +21,16 @@ import { generateReport, ApplicantInput } from "@/lib/report";
 // ─── Request body ─────────────────────────────────────────────────────────────
 
 export interface CheckRequestBody {
-  /** Person name or LinkedIn profile URL (required) */
-  input: string;
+  /**
+   * Person\'s full name (preferred field, sent by the chat UI).
+   * For backwards-compat, `input` is also accepted (plain name or LinkedIn URL).
+   * At least one of `name` or `input` is required.
+   */
+  name?: string;
+  /** @deprecated Use `name` instead. Kept for backwards-compatibility. */
+  input?: string;
+  /** Optional: explicit LinkedIn profile URL */
+  linkedinUrl?: string;
   /** Optional: city/province e.g. "Calgary, AB" */
   location?: string;
   /** Optional: known employer(s) */
@@ -45,21 +53,14 @@ export interface CheckRequestBody {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Splits "First [Middle] Last" into firstName / lastName.
- * Falls back to using the full string as firstName when no spaces present.
- */
 function splitName(fullName: string): { firstName: string; lastName: string } {
-  const parts = fullName.trim().split(/\s+/);
+  const parts = fullName.trim().split(/\\s+/);
   if (parts.length === 1) return { firstName: parts[0], lastName: parts[0] };
   const lastName = parts[parts.length - 1];
   const firstName = parts.slice(0, parts.length - 1).join(" ");
   return { firstName, lastName };
 }
 
-/**
- * Builds a plain-text summary of all search results suitable for the LLM.
- */
 function buildResearchData(
   results: Awaited<ReturnType<typeof searchPerson>>["results"],
   flagged: ReturnType<typeof flagContent>
@@ -84,12 +85,9 @@ function buildResearchData(
     }
   }
 
-  return lines.join("\n");
+  return lines.join("\\n");
 }
 
-/**
- * Returns a JSON error response.
- */
 function jsonError(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: message }), {
     status,
@@ -100,7 +98,6 @@ function jsonError(message: string, status: number): Response {
 // ─── Route handler ─────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest): Promise<Response> {
-  // 1. Parse + validate request body
   let body: CheckRequestBody;
   try {
     body = (await req.json()) as CheckRequestBody;
@@ -108,25 +105,28 @@ export async function POST(req: NextRequest): Promise<Response> {
     return jsonError("Invalid JSON in request body", 400);
   }
 
-  if (!body.input || typeof body.input !== "string" || !body.input.trim()) {
-    return jsonError('Missing required field: "input"', 400);
+  // Accept `name` (new) or `input` (legacy)
+  const rawInput = (body.name ?? body.input ?? "").trim();
+
+  if (!rawInput) {
+    return jsonError("Missing required field: name", 400);
   }
 
-  // 2. Parse LinkedIn URL or name
-  const parsed = parseLinkedInUrl(body.input.trim());
-  const searchName = parsed.searchName || body.input.trim();
+  if (rawInput.length > 200) {
+    return jsonError("Name is too long (max 200 characters)", 400);
+  }
 
-  // Derive a human-readable name:
-  // - If it was a LinkedIn URL, searchName is the profile slug (best we have)
-  // - If it was a plain name, searchName IS the plain name
+  // Determine the display name
+  const linkedinSource = body.linkedinUrl?.trim() ?? rawInput;
+  const parsed = parseLinkedInUrl(linkedinSource);
+  const searchName = parsed.searchName || rawInput;
+
   const displayName = searchName
     .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/\\b\\w/g, (c: string) => c.toUpperCase());
 
-  // Split into first/last for searchPerson
   const { firstName, lastName } = splitName(displayName);
 
-  // Build context array from optional fields
   const context: string[] = [];
   if (body.location) context.push(body.location);
   if (body.employers?.length) context.push(...body.employers);
@@ -141,25 +141,23 @@ export async function POST(req: NextRequest): Promise<Response> {
     ...(context.length > 0 && { context }),
   };
 
-  // 3. Run web searches
   let searchResult: Awaited<ReturnType<typeof searchPerson>>;
   try {
     searchResult = await searchPerson(searchInput);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Search failed";
+    if (/rate.?limit|429|too many requests/i.test(message)) {
+      return jsonError("Rate limit reached: the search service is temporarily unavailable. Please try again in a few minutes.", 429);
+    }
     return jsonError(`Search error: ${message}`, 502);
   }
 
-  // 4. Flag content
   const allText = searchResult.results
     .map((r) => [r.title ?? "", r.snippet ?? ""].join(" "))
-    .join("\n");
+    .join("\\n");
   const flagged = flagContent(allText);
-
-  // 5. Build research data string
   const researchData = buildResearchData(searchResult.results, flagged);
 
-  // 6. Build ApplicantInput for report generation
   const applicantInput: ApplicantInput = {
     name: displayName,
     location: body.location ?? "Unknown",
@@ -173,20 +171,23 @@ export async function POST(req: NextRequest): Promise<Response> {
     ...(body.addresses?.length && { addresses: body.addresses }),
   };
 
-  // 7. Generate streaming report
   let reportStream: ReadableStream<Uint8Array>;
   try {
     reportStream = await generateReport(applicantInput);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Report generation failed";
-    // Surface config/auth errors clearly
     if (message.includes("OPENAI_API_KEY")) {
       return jsonError("Server configuration error: OpenAI API key not set", 500);
+    }
+    if (/rate.?limit|429/i.test(message)) {
+      return jsonError("Rate limit reached: the AI service is temporarily unavailable. Please try again in a few minutes.", 429);
+    }
+    if (/401|403|unauthorized|forbidden/i.test(message)) {
+      return jsonError("Authentication error: the AI service API key is invalid or missing.", 401);
     }
     return jsonError(`Report error: ${message}`, 502);
   }
 
-  // 8. Return SSE stream
   return new Response(reportStream, {
     status: 200,
     headers: {

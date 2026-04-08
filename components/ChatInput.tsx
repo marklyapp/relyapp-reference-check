@@ -6,15 +6,27 @@ interface ChatInputProps {
   onSend: (message: string) => void
   disabled?: boolean
   placeholder?: string
+  /** Maximum character length for the input (shows counter near limit) */
+  maxLength?: number
 }
 
-export default function ChatInput({ onSend, disabled = false, placeholder }: ChatInputProps) {
+export default function ChatInput({
+  onSend,
+  disabled = false,
+  placeholder,
+  maxLength,
+}: ChatInputProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  const trimmed = value.trim()
+  const isEmpty = trimmed.length === 0
+  const overLimit = maxLength !== undefined && value.length > maxLength
+  const nearLimit = maxLength !== undefined && value.length >= Math.floor(maxLength * 0.85)
+  const canSend = !disabled && !isEmpty && !overLimit
+
   const handleSend = () => {
-    const trimmed = value.trim()
-    if (!trimmed || disabled) return
+    if (!canSend) return
     onSend(trimmed)
     setValue('')
     if (textareaRef.current) {
@@ -49,13 +61,27 @@ export default function ChatInput({ onSend, disabled = false, placeholder }: Cha
             disabled={disabled}
             rows={1}
             placeholder={placeholder ?? 'Type a message… (Enter to send, Shift+Enter for newline)'}
-            className="w-full resize-none rounded-xl border border-gray-300 bg-gray-50 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed leading-relaxed"
+            className={`w-full resize-none rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed leading-relaxed transition-colors ${
+              overLimit ? 'border-red-400 bg-red-50' : 'border-gray-300'
+            }`}
             style={{ minHeight: '44px', maxHeight: '120px' }}
           />
+
+          {/* Character counter — only shown when near/over limit */}
+          {maxLength !== undefined && nearLimit && (
+            <span
+              className={`absolute bottom-2 right-3 text-xs font-mono ${
+                overLimit ? 'text-red-500' : 'text-gray-400'
+              }`}
+            >
+              {value.length}/{maxLength}
+            </span>
+          )}
         </div>
+
         <button
           onClick={handleSend}
-          disabled={disabled || !value.trim()}
+          disabled={!canSend}
           aria-label="Send message"
           className="flex-shrink-0 w-10 h-10 rounded-xl bg-blue-700 text-white flex items-center justify-center hover:bg-blue-800 active:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
