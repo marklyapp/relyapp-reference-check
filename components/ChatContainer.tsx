@@ -76,26 +76,8 @@ export default function ChatContainer() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Replace or append to a message by id
-  const upsertMessage = useCallback((msg: Message) => {
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === msg.id)
-      if (idx === -1) return [...prev, msg]
-      const next = [...prev]
-      next[idx] = msg
-      return next
-    })
-  }, [])
-
-  // Append a chunk to an existing message's content
-  const appendChunk = useCallback((msgId: string, chunk: string) => {
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === msgId)
-      if (idx === -1) return prev
-      const next = [...prev]
-      next[idx] = { ...next[idx], content: next[idx].content + chunk }
-      return next
-    })
+  const addMessage = useCallback((msg: Message) => {
+    setMessages((prev) => [...prev, msg])
   }, [])
 
   const triggerCheck = useCallback(
@@ -146,8 +128,6 @@ export default function ChatContainer() {
     },
     [runCheck]
   )
-
-  const addMessage = (msg: Message) => setMessages((prev) => [...prev, msg])
 
   const handleSend = (text: string) => {
     if (isRunning) return
