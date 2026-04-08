@@ -3,11 +3,11 @@
  * Custom hook that POSTs to /api/check and consumes the SSE stream,
  * appending text chunks to an assistant message in real-time.
  *
- * refs #10
+ * refs #10, #13
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Message, MessageRole } from '@/components/ChatMessage'
+import { Message, MessageRole, MessageStatus } from '@/components/ChatMessage'
 
 export interface ReferenceCheckInput {
   name: string
@@ -50,10 +50,112 @@ function assistantMsg(content: string): Message {
   return { id: makeId(), role: 'assistant' as MessageRole, content, timestamp: new Date() }
 }
 
+function errorMsg(content: string, retryKey?: string): Message {
+  return {
+    id: makeId(),
+    role: 'assistant' as MessageRole,
+    content,
+    timestamp: new Date(),
+    status: 'error' as MessageStatus,
+    retryKey,
+  }
+}
+
+/**
+ * Classify an HTTP status code + body into a user-friendly error message.
+ */
+function classifyHttpError(status: number, detail: string, retryKey: string): Message {
+  if (status === 429) {
+    return errorMsg(
+      '⚠️ **Rate limit reached.** The search service is temporarily limiting requests.\n\nPlease wait a minute and try again.',
+      retryKey
+    )
+  }
+  if (status === 503 || status === 502) {
+    return errorMsg(
+      '⚠️ **Search service unavailable.** The reference check service is temporarily down.\n\nPlease try again in a few minutes.',
+      retryKey
+    )
+  }
+  if (
+    status === 500 &&
+    (detail.toLowerCase().includes('api key') ||
+      detail.toLowerCase().includes('configuration') ||
+      detail.toLowerCase().includes('openai'))
+  ) {
+    return errorMsg(
+      '⚠️ **Server configuration error.** The OpenAI API key or search API key is not configured on the server.\n\nPlease contact your administrator.',
+      undefined // No retry for config errors — retrying won't help
+    )
+  }
+  if (status === 401 || status === 403) {
+    return errorMsg(
+      '⚠️ **Authentication error.** The search API key is invalid or missing.\n\nPlease contact your administrator.',
+      undefined
+    )
+  }
+  if (status === 400) {
+    return errorMsg(
+      `⚠️ **Invalid request.** ${detail}\n\nPlease check your input and try again.`,
+      retryKey
+    )
+  }
+  return errorMsg(
+    `⚠️ **The reference check could not be completed.**\n\n*${detail}*\n\nPlease try again or contact support if the issue persists.`,
+    retryKey
+  )
+}
+
+/**
+ * Classify a network/stream error into a user-friendly message.
+ */
+function classifyNetworkError(err: unknown, retryKey: string): Message {
+  const msg = err instanceof Error ? err.message : String(err)
+
+  if (
+    msg.toLowerCase().includes('rate limit') ||
+    msg.toLowerCase().includes('rate_limit') ||
+    msg.toLowerCase().includes('429')
+  ) {
+    return errorMsg(
+      '⚠️ **Rate limit reached.** The search service is temporarily limiting requests.\n\nPlease wait a minute and try again.',
+      retryKey
+    )
+  }
+
+  if (
+    msg.toLowerCase().includes('api key') ||
+    msg.toLowerCase().includes('apikey') ||
+    msg.toLowerCase().includes('unauthorized') ||
+    msg.toLowerCase().includes('invalid_api_key')
+  ) {
+    return errorMsg(
+      '⚠️ **API key error.** The search API key is missing or invalid.\n\nPlease contact your administrator.',
+      undefined
+    )
+  }
+
+  if (
+    msg.toLowerCase().includes('failed to fetch') ||
+    msg.toLowerCase().includes('network') ||
+    msg.toLowerCase().includes('econnrefused') ||
+    msg.toLowerCase().includes('enotfound')
+  ) {
+    return errorMsg(
+      '⚠️ **Connection error.** Unable to reach the reference check service.\n\nPlease check your internet connection and try again.',
+      retryKey
+    )
+  }
+
+  return errorMsg(
+    `⚠️ **An unexpected error occurred.**\n\n*${msg}*\n\nPlease try again or contact support.`,
+    retryKey
+  )
+}
+
 /**
  * Normalise the collected SubjectInfo into a CheckRequestBody.
  * Fields containing only "skip" (case-insensitive) are omitted.
- * Uses separate named fields for name and linkedinUrl to avoid ambiguity.
  */
 function buildRequestBody(input: ReferenceCheckInput): Record<string, unknown> {
   const isSkip = (v?: string) => !v || /^skip$/i.test(v.trim())
@@ -74,7 +176,6 @@ function buildRequestBody(input: ReferenceCheckInput): Record<string, unknown> {
       .filter(Boolean)
   }
   if (!isSkip(input.usernames)) {
-    // Could be emails or usernames — pass as usernames
     body.usernames = input.usernames!
       .split(',')
       .map((s) => s.trim())
@@ -87,17 +188,14 @@ function buildRequestBody(input: ReferenceCheckInput): Record<string, unknown> {
 export function useReferenceCheck(): UseReferenceCheckReturn {
   const [status, setStatus] = useState<CheckStatus>('idle')
 
-  // Persists the active AbortController across renders so unmount can abort it
   const controllerRef = useRef<AbortController | null>(null)
 
-  // Abort any in-progress fetch/stream when the component unmounts
   useEffect(() => {
     return () => {
       controllerRef.current?.abort()
     }
   }, [])
 
-  /** Imperatively cancel any active check */
   const cancel = useCallback(() => {
     controllerRef.current?.abort()
     controllerRef.current = null
@@ -115,12 +213,12 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
       }
     ) => {
       const msgId = makeId()
+      // retryKey is stable across retries — used by the UI to identify which check to retry
+      const retryKey = makeId()
 
-      // Create a new controller and store it in the ref so unmount can abort it
       const controller = new AbortController()
       controllerRef.current = controller
 
-      // --- Search phase: show loading indicator ---
       setStatus('searching')
       callbacks.onStart(
         msgId,
@@ -138,17 +236,10 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') return
         setStatus('error')
-        const errDetail = err instanceof Error ? err.message : 'Network error'
-        callbacks.onError(
-          msgId,
-          assistantMsg(
-            `⚠️ Unable to connect to the reference check service. Please check your connection and try again.\n\n*Details: ${errDetail}*`
-          )
-        )
+        callbacks.onError(msgId, classifyNetworkError(err, retryKey))
         return
       }
 
-      // Non-2xx → parse error body and surface message
       if (!response.ok) {
         setStatus('error')
         let detail = `HTTP ${response.status}`
@@ -158,16 +249,10 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
         } catch {
           // ignore parse failure
         }
-        callbacks.onError(
-          msgId,
-          assistantMsg(
-            `⚠️ The reference check could not be completed.\n\n*${detail}*\n\nPlease try again or contact support if the issue persists.`
-          )
-        )
+        callbacks.onError(msgId, classifyHttpError(response.status, detail, retryKey))
         return
       }
 
-      // --- Streaming phase ---
       setStatus('streaming')
 
       const reader = response.body?.getReader()
@@ -175,12 +260,14 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
         setStatus('error')
         callbacks.onError(
           msgId,
-          assistantMsg('⚠️ Unexpected response from the server. Please try again.')
+          errorMsg(
+            '⚠️ **Unexpected server response.** No data stream was returned.\n\nPlease try again.',
+            retryKey
+          )
         )
         return
       }
 
-      // Cancel the stream reader when the AbortController fires (component unmount)
       controller.signal.addEventListener('abort', () => {
         reader.cancel().catch(() => {})
       })
@@ -188,10 +275,6 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
       const decoder = new TextDecoder()
       let buffer = ''
 
-      /**
-       * Process all complete SSE lines currently in `buffer`.
-       * Returns true if [DONE] was received (caller should stop the loop).
-       */
       function processBuffer(): boolean {
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
@@ -211,12 +294,9 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
 
             if (parsed.error) {
               setStatus('error')
-              callbacks.onError(
-                msgId,
-                assistantMsg(
-                  `⚠️ An error occurred while generating the report.\n\n*${parsed.error}*`
-                )
-              )
+              // Classify stream-level errors too
+              const streamErr = classifyNetworkError(new Error(parsed.error), retryKey)
+              callbacks.onError(msgId, streamErr)
               return true
             }
 
@@ -237,7 +317,6 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
           const { done, value } = await reader.read()
 
           if (done) {
-            // Flush any remaining content in the buffer before completing
             if (buffer.trim()) {
               processBuffer()
             }
@@ -249,21 +328,13 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
           if (processBuffer()) return
         }
 
-        // Stream ended without [DONE] — treat as complete
         setStatus('done')
         callbacks.onComplete(msgId)
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') return
         setStatus('error')
-        const errDetail = err instanceof Error ? err.message : 'Stream read error'
-        callbacks.onError(
-          msgId,
-          assistantMsg(
-            `⚠️ The report stream was interrupted.\n\n*${errDetail}*\n\nPartial results may be shown above.`
-          )
-        )
+        callbacks.onError(msgId, classifyNetworkError(err, retryKey))
       } finally {
-        // Clear the ref once this check is fully resolved
         if (controllerRef.current === controller) {
           controllerRef.current = null
         }

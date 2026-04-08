@@ -4,20 +4,27 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 export type MessageRole = 'user' | 'assistant'
+export type MessageStatus = 'normal' | 'error' | 'loading'
 
 export interface Message {
   id: string
   role: MessageRole
   content: string
   timestamp: Date
+  /** When set, shows a retry button beneath the message */
+  status?: MessageStatus
+  /** Stable key for retrying this check — passed back to onRetry */
+  retryKey?: string
 }
 
 interface ChatMessageProps {
   message: Message
+  onRetry?: (retryKey: string) => void
 }
 
-export default function ChatMessage({ message }: ChatMessageProps) {
+export default function ChatMessage({ message, onRetry }: ChatMessageProps) {
   const isUser = message.role === 'user'
+  const isError = message.status === 'error'
 
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
@@ -31,6 +38,8 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
             isUser
               ? 'bg-blue-700 text-white rounded-br-sm'
+              : isError
+              ? 'bg-red-50 text-red-800 rounded-bl-sm border border-red-200'
               : 'bg-gray-100 text-gray-800 rounded-bl-sm border border-gray-200'
           }`}
         >
@@ -58,6 +67,29 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             </div>
           )}
         </div>
+
+        {/* Retry button for error messages */}
+        {isError && message.retryKey && onRetry && (
+          <button
+            onClick={() => onRetry(message.retryKey!)}
+            className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-700 text-xs font-medium border border-red-200 transition-colors"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="w-3.5 h-3.5"
+            >
+              <path
+                fillRule="evenodd"
+                d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
+                clipRule="evenodd"
+              />
+            </svg>
+            Retry check
+          </button>
+        )}
+
         <span className="text-xs text-gray-400 mt-1 px-1">
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
