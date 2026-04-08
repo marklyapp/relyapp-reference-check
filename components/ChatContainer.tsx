@@ -186,7 +186,7 @@ export default function ChatContainer() {
           return
         }
 
-        if (text.replace(/\\s/g, '').length < MIN_NAME_LENGTH) {
+        if (text.replace(/\s/g, '').length < MIN_NAME_LENGTH) {
           setTimeout(() => {
             addMessage(assistantMsg(`Please enter a full name (at least ${MIN_NAME_LENGTH} characters).`))
           }, 400)

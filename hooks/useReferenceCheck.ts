@@ -204,7 +204,7 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
       let buffer = ''
 
       function processBuffer(): boolean {
-        const lines = buffer.split('\\n')
+        const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
 
         for (const line of lines) {

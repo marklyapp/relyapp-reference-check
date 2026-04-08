@@ -54,7 +54,7 @@ export interface CheckRequestBody {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function splitName(fullName: string): { firstName: string; lastName: string } {
-  const parts = fullName.trim().split(/\\s+/);
+  const parts = fullName.trim().split(/\s+/);
   if (parts.length === 1) return { firstName: parts[0], lastName: parts[0] };
   const lastName = parts[parts.length - 1];
   const firstName = parts.slice(0, parts.length - 1).join(" ");
@@ -85,7 +85,7 @@ function buildResearchData(
     }
   }
 
-  return lines.join("\\n");
+  return lines.join("\n");
 }
 
 function jsonError(message: string, status: number): Response {
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const displayName = searchName
     .replace(/-/g, " ")
-    .replace(/\\b\\w/g, (c: string) => c.toUpperCase());
+    .replace(/\b\w/g, (c: string) => c.toUpperCase());
 
   const { firstName, lastName } = splitName(displayName);
 
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const allText = searchResult.results
     .map((r) => [r.title ?? "", r.snippet ?? ""].join(" "))
-    .join("\\n");
+    .join("\n");
   const flagged = flagContent(allText);
   const researchData = buildResearchData(searchResult.results, flagged);
 
