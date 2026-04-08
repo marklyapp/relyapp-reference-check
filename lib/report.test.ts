@@ -65,37 +65,41 @@ async function* fakeStream(chunks: string[]) {
   }
 }
 
+// ─── Test isolation guards ────────────────────────────────────────────────────
+
+beforeEach(() => {
+  mockCreate.mockClear();
+  process.env.OPENAI_API_KEY = "sk-test-mock";
+});
+
+afterEach(() => {
+  delete process.env.OPENAI_API_KEY;
+});
+
 // ─── API key guard ────────────────────────────────────────────────────────────
 
 test("generateReport throws if OPENAI_API_KEY is not set", async () => {
-  const original = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
   await expect(generateReport(MINIMAL_INPUT)).rejects.toThrow(
     "OPENAI_API_KEY environment variable is not set"
   );
-
-  if (original !== undefined) process.env.OPENAI_API_KEY = original;
 });
 
 // ─── Return type ──────────────────────────────────────────────────────────────
 
 test("generateReport returns a ReadableStream", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(
     fakeStream(["HOMER SIMPSON BACKGROUND CHECK\n", "Springfield, AB\n", "Recommendation: Proceed"])
   );
 
   const stream = await generateReport(MINIMAL_INPUT);
   expect(stream).toBeInstanceOf(ReadableStream);
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 // ─── SSE chunk format ─────────────────────────────────────────────────────────
 
 test("generateReport emits SSE-formatted chunks with text key", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(
     fakeStream(["Hello", " World"])
   );
@@ -118,14 +122,11 @@ test("generateReport emits SSE-formatted chunks with text key", async () => {
   expect(combined).toContain('"text"');
   // Should end with [DONE]
   expect(combined).toContain("[DONE]");
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 test("generateReport uses gpt-4o by default", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -133,12 +134,9 @@ test("generateReport uses gpt-4o by default", async () => {
   expect(mockCreate).toHaveBeenCalledWith(
     expect.objectContaining({ model: "gpt-4o" })
   );
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport accepts custom model option", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT, { model: "gpt-4o-mini" });
@@ -146,12 +144,9 @@ test("generateReport accepts custom model option", async () => {
   expect(mockCreate).toHaveBeenCalledWith(
     expect.objectContaining({ model: "gpt-4o-mini" })
   );
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport uses temperature 0.3 by default", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -159,12 +154,9 @@ test("generateReport uses temperature 0.3 by default", async () => {
   expect(mockCreate).toHaveBeenCalledWith(
     expect.objectContaining({ temperature: 0.3 })
   );
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport uses streaming mode", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -172,8 +164,6 @@ test("generateReport uses streaming mode", async () => {
   expect(mockCreate).toHaveBeenCalledWith(
     expect.objectContaining({ stream: true })
   );
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 // ─── ApplicantInput types ─────────────────────────────────────────────────────
@@ -203,7 +193,6 @@ test("ApplicantInput accepts all optional fields", () => {
 // ─── Prompt includes all report sections ─────────────────────────────────────
 
 test("generateReport prompt includes applicant name", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(FULL_INPUT);
@@ -212,12 +201,9 @@ test("generateReport prompt includes applicant name", async () => {
   const userMessage = callArgs.messages.find((m: { role: string }) => m.role === "user");
   expect(userMessage.content).toContain("Homer Jay Simpson");
   expect(userMessage.content).toContain("Calgary, AB");
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport prompt includes SCHEDULES section", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -229,12 +215,9 @@ test("generateReport prompt includes SCHEDULES section", async () => {
   expect(userMessage.content).toContain("SCHEDULE C");
   expect(userMessage.content).toContain("SCHEDULE D");
   expect(userMessage.content).toContain("SCHEDULE E");
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport prompt includes SOURCES/CHECKLIST section", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -245,12 +228,9 @@ test("generateReport prompt includes SOURCES/CHECKLIST section", async () => {
   expect(userMessage.content).toContain("Elections AB");
   expect(userMessage.content).toContain("Elections Canada");
   expect(userMessage.content).toContain("CanLii");
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport prompt includes SEARCH TERMS with OR operators", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(MINIMAL_INPUT);
@@ -259,12 +239,9 @@ test("generateReport prompt includes SEARCH TERMS with OR operators", async () =
   const userMessage = callArgs.messages.find((m: { role: string }) => m.role === "user");
   expect(userMessage.content).toContain("SEARCH TERMS");
   expect(userMessage.content).toContain("OR");
-
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("generateReport prompt includes employer in search terms", async () => {
-  process.env.OPENAI_API_KEY = "sk-test-mock";
   mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
 
   await generateReport(FULL_INPUT);
@@ -272,6 +249,4 @@ test("generateReport prompt includes employer in search terms", async () => {
   const callArgs = mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0];
   const userMessage = callArgs.messages.find((m: { role: string }) => m.role === "user");
   expect(userMessage.content).toContain("Springfield Nuclear Power Plant");
-
-  delete process.env.OPENAI_API_KEY;
 });

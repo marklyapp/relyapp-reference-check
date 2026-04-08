@@ -308,12 +308,9 @@ export async function generateReport(
             const sseMessage = `data: ${JSON.stringify({ text: content })}\n\n`;
             controller.enqueue(encoder.encode(sseMessage));
           }
-
-          // Send [DONE] signal when stream finishes
-          if (chunk.choices[0]?.finish_reason === "stop") {
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          }
         }
+        // Send [DONE] signal unconditionally after stream ends
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       } catch (error) {
         const errMessage =
