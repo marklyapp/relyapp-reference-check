@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import ChatMessage, { Message, MessageRole } from './ChatMessage'
 import ChatInput from './ChatInput'
+import { useReferenceCheck } from '@/hooks/useReferenceCheck'
 
 type ConversationStep =
   | 'intro'
@@ -44,7 +45,7 @@ function getNextPrompt(step: ConversationStep): string {
   }
 }
 
-function getSummary(info: SubjectInfo): string {
+function getCollectionConfirmation(info: SubjectInfo): string {
   const lines = [`Subject: ${info.name}`]
   if (info.location && info.location.toLowerCase() !== 'skip') lines.push(`Location: ${info.location}`)
   if (info.linkedin && info.linkedin.toLowerCase() !== 'skip') lines.push(`LinkedIn: ${info.linkedin}`)
@@ -54,7 +55,7 @@ function getSummary(info: SubjectInfo): string {
   return (
     "Thank you. Here's a summary of the information collected:\n\n" +
     lines.join('\n') +
-    '\n\nA reference check report will be generated shortly. (API integration coming in a future release.)'
+    '\n\nStarting the reference check now…'
   )
 }
 
@@ -69,13 +70,88 @@ export default function ChatContainer() {
   const [info, setInfo] = useState<SubjectInfo>({})
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  const { isRunning, runCheck } = useReferenceCheck()
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Replace or append to a message by id
+  const upsertMessage = useCallback((msg: Message) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msg.id)
+      if (idx === -1) return [...prev, msg]
+      const next = [...prev]
+      next[idx] = msg
+      return next
+    })
+  }, [])
+
+  // Append a chunk to an existing message's content
+  const appendChunk = useCallback((msgId: string, chunk: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msgId)
+      if (idx === -1) return prev
+      const next = [...prev]
+      next[idx] = { ...next[idx], content: next[idx].content + chunk }
+      return next
+    })
+  }, [])
+
+  const triggerCheck = useCallback(
+    (collectedInfo: SubjectInfo) => {
+      runCheck(
+        {
+          name: collectedInfo.name ?? '',
+          location: collectedInfo.location,
+          linkedin: collectedInfo.linkedin,
+          employers: collectedInfo.employers,
+          usernames: collectedInfo.usernames,
+        },
+        {
+          onStart: (msgId, loadingMsg) => {
+            // Insert loading message with the given id
+            setMessages((prev) => [...prev, { ...loadingMsg, id: msgId }])
+          },
+          onChunk: (msgId, chunk) => {
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.id === msgId)
+              if (idx === -1) return prev
+              const current = prev[idx]
+              const isLoading = current.content.startsWith('🔍')
+              const next = [...prev]
+              // First real chunk: replace loading text entirely
+              next[idx] = {
+                ...current,
+                content: isLoading ? chunk : current.content + chunk,
+              }
+              return next
+            })
+          },
+          onComplete: (_msgId) => {
+            // Status is already set to done by the hook; nothing extra needed
+          },
+          onError: (msgId, errorMsg) => {
+            // Replace the placeholder with the error message
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.id === msgId)
+              if (idx === -1) return [...prev, errorMsg]
+              const next = [...prev]
+              next[idx] = { ...errorMsg, id: msgId }
+              return next
+            })
+          },
+        }
+      )
+    },
+    [runCheck]
+  )
+
   const addMessage = (msg: Message) => setMessages((prev) => [...prev, msg])
 
   const handleSend = (text: string) => {
+    if (isRunning) return
+
     // Add user message
     const userMsg: Message = { id: makeId(), role: 'user', content: text, timestamp: new Date() }
     setMessages((prev) => [...prev, userMsg])
@@ -118,10 +194,12 @@ export default function ChatContainer() {
     setInfo(updatedInfo)
     setStep(nextStep)
 
-    // Schedule assistant response
     setTimeout(() => {
       if (nextStep === 'complete') {
-        addMessage(assistantMsg(getSummary(updatedInfo)))
+        // Show collection summary, then trigger API call
+        addMessage(assistantMsg(getCollectionConfirmation(updatedInfo)))
+        // Small extra delay so the user sees the summary before searching starts
+        setTimeout(() => triggerCheck(updatedInfo), 600)
       } else {
         const prompt = getNextPrompt(nextStep)
         if (prompt) addMessage(assistantMsg(prompt))
@@ -130,6 +208,7 @@ export default function ChatContainer() {
   }
 
   const isComplete = step === 'complete'
+  const inputDisabled = isComplete || isRunning
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -147,9 +226,19 @@ export default function ChatContainer() {
               <p className="text-xs text-gray-500">Government of Alberta</p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-50 text-green-700 text-xs font-medium border border-green-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-            Online
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
+              isRunning
+                ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                : 'bg-green-50 text-green-700 border-green-200'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full inline-block ${
+                isRunning ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
+              }`}
+            />
+            {isRunning ? 'Checking…' : 'Online'}
           </span>
         </div>
       </header>
@@ -168,9 +257,11 @@ export default function ChatContainer() {
       <div className="flex-shrink-0">
         <ChatInput
           onSend={handleSend}
-          disabled={isComplete}
+          disabled={inputDisabled}
           placeholder={
-            isComplete
+            isRunning
+              ? 'Reference check in progress…'
+              : isComplete
               ? 'Reference check complete.'
               : step === 'await_name'
               ? "Enter the subject's full name…"
