@@ -29,13 +29,6 @@ function assistantMsg(content: string): Message {
   return { id: makeId(), role: 'assistant' as MessageRole, content, timestamp: new Date() }
 }
 
-const INTRO_MESSAGES: Message[] = [
-  assistantMsg(
-    "Welcome to RelyApp Reference Check.\n\nI'll help you run a background reference check. Please provide details about the person you'd like to check — the more information you share, the more accurate the results."
-  ),
-  assistantMsg("Let's start with the subject's full name."),
-]
-
 function getNextPrompt(step: ConversationStep): string {
   switch (step) {
     case 'await_location':
@@ -52,11 +45,11 @@ function getNextPrompt(step: ConversationStep): string {
 }
 
 function getSummary(info: SubjectInfo): string {
-  const lines = [`**Subject:** ${info.name}`]
-  if (info.location && info.location.toLowerCase() !== 'skip') lines.push(`**Location:** ${info.location}`)
-  if (info.linkedin && info.linkedin.toLowerCase() !== 'skip') lines.push(`**LinkedIn:** ${info.linkedin}`)
-  if (info.employers && info.employers.toLowerCase() !== 'skip') lines.push(`**Employers:** ${info.employers}`)
-  if (info.usernames && info.usernames.toLowerCase() !== 'skip') lines.push(`**Usernames/Emails:** ${info.usernames}`)
+  const lines = [`Subject: ${info.name}`]
+  if (info.location && info.location.toLowerCase() !== 'skip') lines.push(`Location: ${info.location}`)
+  if (info.linkedin && info.linkedin.toLowerCase() !== 'skip') lines.push(`LinkedIn: ${info.linkedin}`)
+  if (info.employers && info.employers.toLowerCase() !== 'skip') lines.push(`Employers: ${info.employers}`)
+  if (info.usernames && info.usernames.toLowerCase() !== 'skip') lines.push(`Usernames/Emails: ${info.usernames}`)
 
   return (
     "Thank you. Here's a summary of the information collected:\n\n" +
@@ -66,7 +59,12 @@ function getSummary(info: SubjectInfo): string {
 }
 
 export default function ChatContainer() {
-  const [messages, setMessages] = useState<Message[]>(INTRO_MESSAGES)
+  const [messages, setMessages] = useState<Message[]>(() => [
+    assistantMsg(
+      "Welcome to RelyApp Reference Check.\n\nI'll help you run a background reference check. Please provide details about the person you'd like to check — the more information you share, the more accurate the results."
+    ),
+    assistantMsg("Let's start with the subject's full name."),
+  ])
   const [step, setStep] = useState<ConversationStep>('await_name')
   const [info, setInfo] = useState<SubjectInfo>({})
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -88,6 +86,12 @@ export default function ChatContainer() {
 
     switch (step) {
       case 'await_name':
+        if (/^skip$/i.test(text.trim())) {
+          setTimeout(() => {
+            addMessage(assistantMsg("The subject's full name is required — please enter a name to continue."))
+          }, 400)
+          return
+        }
         updatedInfo.name = text
         nextStep = 'await_location'
         break
