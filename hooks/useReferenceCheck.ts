@@ -6,7 +6,7 @@
  * refs #10
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Message, MessageRole } from '@/components/ChatMessage'
 
 export interface ReferenceCheckInput {
@@ -38,6 +38,8 @@ interface UseReferenceCheckReturn {
       onError: (msgId: string, errorMsg: Message) => void
     }
   ) => Promise<void>
+  /** Abort any in-progress check immediately */
+  cancel: () => void
 }
 
 function makeId() {
@@ -85,6 +87,23 @@ function buildRequestBody(input: ReferenceCheckInput): Record<string, unknown> {
 export function useReferenceCheck(): UseReferenceCheckReturn {
   const [status, setStatus] = useState<CheckStatus>('idle')
 
+  // Persists the active AbortController across renders so unmount can abort it
+  const controllerRef = useRef<AbortController | null>(null)
+
+  // Abort any in-progress fetch/stream when the component unmounts
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.abort()
+    }
+  }, [])
+
+  /** Imperatively cancel any active check */
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort()
+    controllerRef.current = null
+    setStatus('idle')
+  }, [])
+
   const runCheck = useCallback(
     async (
       input: ReferenceCheckInput,
@@ -97,8 +116,9 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
     ) => {
       const msgId = makeId()
 
-      // AbortController lets us cancel the fetch if the component unmounts
+      // Create a new controller and store it in the ref so unmount can abort it
       const controller = new AbortController()
+      controllerRef.current = controller
 
       // --- Search phase: show loading indicator ---
       setStatus('searching')
@@ -242,6 +262,11 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
             `⚠️ The report stream was interrupted.\n\n*${errDetail}*\n\nPartial results may be shown above.`
           )
         )
+      } finally {
+        // Clear the ref once this check is fully resolved
+        if (controllerRef.current === controller) {
+          controllerRef.current = null
+        }
       }
     },
     []
@@ -251,5 +276,6 @@ export function useReferenceCheck(): UseReferenceCheckReturn {
     status,
     isRunning: status === 'searching' || status === 'streaming',
     runCheck,
+    cancel,
   }
 }
