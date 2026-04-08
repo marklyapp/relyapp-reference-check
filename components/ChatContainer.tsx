@@ -70,7 +70,14 @@ export default function ChatContainer() {
   const [info, setInfo] = useState<SubjectInfo>({})
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const { isRunning, runCheck } = useReferenceCheck()
+  const { isRunning, runCheck, cancel } = useReferenceCheck()
+
+  // Abort any in-progress stream when this component unmounts
+  useEffect(() => {
+    return () => {
+      cancel()
+    }
+  }, [cancel])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
