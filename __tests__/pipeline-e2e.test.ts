@@ -60,7 +60,7 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
             'Brian Jean is a Canadian politician from Fort McMurray, Alberta. He served as leader of the Wildrose Party. He was elected MLA for Fort McMurray-Lac La Biche.',
         },
       ],
-      max_tokens: 200,
+      max_tokens: 16000,
       // NO temperature — gpt-5 doesn't support it
     });
 
@@ -112,7 +112,7 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
         },
         { role: 'user', content: combined },
       ],
-      max_tokens: 2000,
+      max_tokens: 16000,
     });
 
     const reportText = report.choices[0].message.content!;
@@ -121,22 +121,19 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
     expect(reportText.toUpperCase()).toMatch(/NOTABLE|PERSONAL|DONATION|SOCIAL|SOURCE/);
 
     // ── Convert report to .docx and save to test-output/ ──────────────────
-    const outputDir = path.join(__dirname, '..', 'test-output');
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+    fs.mkdirSync('test-output', { recursive: true });
 
     const docxBlob = await markdownToDocx(reportText, 'Brian Jean');
 
     // Convert Blob → Buffer (Node.js compatible)
     const arrayBuffer = await docxBlob.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const docxBuffer = Buffer.from(arrayBuffer);
 
-    const outputPath = path.join(outputDir, 'brian-jean-report.docx');
-    fs.writeFileSync(outputPath, buffer);
+    fs.writeFileSync('test-output/brian-jean-report.docx', docxBuffer);
+    fs.writeFileSync('test-output/brian-jean-report.md', reportText);
 
-    // Assert file exists and is non-empty
-    expect(fs.existsSync(outputPath)).toBe(true);
-    expect(fs.statSync(outputPath).size).toBeGreaterThan(0);
+    // Assert .docx file exists and is non-empty
+    expect(fs.existsSync('test-output/brian-jean-report.docx')).toBe(true);
+    expect(fs.statSync('test-output/brian-jean-report.docx').size).toBeGreaterThan(0);
   });
 });
