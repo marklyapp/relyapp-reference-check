@@ -8,6 +8,7 @@ const envSchema = z.object({
   SEARCH_API_PROVIDER: z.enum(['serp', 'brave', 'azure']).default('azure'),
   // Optional Azure OpenAI endpoint — used as fallback if LiteLLM proxy doesn't support Responses API
   AZURE_OPENAI_ENDPOINT: z.string().optional(),
+  OPENAI_MODEL: z.string().default('gpt-4.1'),
 });
 
 // Refine: SEARCH_API_KEY is required for serp/brave, but not for azure
@@ -34,6 +35,7 @@ export function getConfig(): Config {
     SEARCH_API_KEY: process.env.SEARCH_API_KEY,
     SEARCH_API_PROVIDER: process.env.SEARCH_API_PROVIDER,
     AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
   });
   _config = parsed as Config;
   return _config;

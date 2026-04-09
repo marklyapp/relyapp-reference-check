@@ -386,7 +386,7 @@ async function generateReportAzure(
   if (baseURL) clientOptions.baseURL = baseURL;
 
   const client = new OpenAI(clientOptions);
-  const model = options.model ?? "gpt-4o";
+  const model = options.model ?? getConfig().OPENAI_MODEL;
 
   const userPrompt = buildAzureReportPrompt(input);
 
@@ -471,7 +471,7 @@ async function generateReportChatCompletions(
   if (baseURL) clientOptions.baseURL = baseURL;
 
   const client = new OpenAI(clientOptions);
-  const model = options.model ?? "gpt-4o";
+  const model = options.model ?? getConfig().OPENAI_MODEL;
   const temperature = options.temperature ?? 0.3;
 
   const systemPrompt = buildSystemPrompt();
