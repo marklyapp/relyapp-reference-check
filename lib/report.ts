@@ -4,10 +4,12 @@
  * Report format follows the Board Applicant Research Assistant specification.
  *
  * Supports two code paths:
- *  - azure: Uses OpenAI Responses API with web_search tool (search + report in one call)
+ *  - azure: Two-stage pipeline:
+ *      Stage 1 — 3 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
+ *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / gpt-5.4-pro)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
- * refs #6, #30
+ * refs #6, #30, #34
  */
 
 import OpenAI from "openai";
@@ -166,109 +168,6 @@ SEARCH TERMS
 ${searchTerms}`;
 }
 
-// ─── Azure prompt (Responses API — model searches web itself) ─────────────────
-
-function buildAzureReportPrompt(input: ApplicantInput): string {
-  const searchTerms = generateSearchTerms(input);
-
-  return `You are a Board Applicant Research Assistant for the Government of Alberta Executive Council.
-Use the web_search tool to research the following applicant thoroughly, then produce a structured background check report.
-
-APPLICANT: ${input.name}
-LOCATION: ${input.location}
-${input.role ? `ROLE: ${input.role}` : ""}
-${input.employers?.length ? `EMPLOYERS: ${input.employers.join(", ")}` : ""}
-${input.businesses?.length ? `BUSINESSES: ${input.businesses.join(", ")}` : ""}
-${input.organizations?.length ? `ORGANIZATIONS: ${input.organizations.join(", ")}` : ""}
-
-SUGGESTED SEARCH TERMS (search each to gather comprehensive data):
-${searchTerms}
-
-Search for:
-- Political donations (Elections Alberta, Elections Canada)
-- Social media presence (LinkedIn, Facebook, Twitter/X, Instagram, YouTube)
-- Professional discipline records (Law Society AB, RECA, APEGA, CPA Alberta)
-- Court cases (CanLii)
-- News articles and general web mentions
-
-After gathering research data, generate the report in this EXACT format:
-
-${input.name.toUpperCase()} BACKGROUND CHECK
-${input.location}
-Recommendation: [Proceed / Caution / Do Not Proceed]
-
-NOTABLE ITEMS
-- [Key finding 1]
-- [Add more as needed, or "None identified" if nothing notable]
-
-PERSONAL INFORMATION
-[Role/occupation description and any demographic details found]
-
-DONATIONS
-Elections AB: [Results or "None found"]
-Elections Canada: [Results or "None found"]
-
-SOCIAL MEDIA/ONLINE PRESENCE
-
-Facebook:
-Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
-Notable Posts: [Reference to Schedule A, or "None"]
-
-Instagram:
-Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
-Notable Posts: [Reference to Schedule B, or "None"]
-
-LinkedIn:
-Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
-Notable Posts: [Reference to Schedule C, or "None"]
-
-Twitter/X:
-Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
-Notable Posts: [Reference to Schedule D, or "None"]
-
-YouTube:
-Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
-
-Other:
-[Any other platforms or "None"]
-Notable Posts: [Reference to Schedule E, or "None"]
-
-SCHEDULE A – Facebook
-[List flagged posts with direct URLs, or "No flagged posts"]
-
-SCHEDULE B – Instagram
-[List flagged posts with direct URLs, or "No flagged posts"]
-
-SCHEDULE C – LinkedIn
-[List flagged posts with direct URLs, or "No flagged posts"]
-
-SCHEDULE D – Twitter/X
-[List flagged posts with direct URLs, or "No flagged posts"]
-
-SCHEDULE E – Other
-[List flagged posts with direct URLs, or "No flagged posts"]
-
-SOURCES/CHECKLIST
-✓ Professional Discipline (Law Society of Alberta, Real Estate Council of Alberta, APEGA)
-✓ Elections AB contributor search (quarterly, annual, leadership, nomination, third-party ads)
-✓ Elections Canada donation database
-✓ Google (search terms listed below)
-✓ LinkedIn (Resume Info, Top Interests, Posts, Comments, Reactions)
-✓ Twitter/X (Tweets, Replies, Media, Following, Username)
-✓ Facebook (Friends, Photos, About Info, Likes/Events, Posts, Username)
-✓ Instagram (Posts and comments, Tagged Posts, Reels, Following, Username)
-✓ YouTube
-✓ CanLii (Canadian Legal Information Institute)
-
-SEARCH TERMS
-${searchTerms}`;
-}
-
 // ─── Search Term Generation ───────────────────────────────────────────────────
 
 function generateNameVariations(fullName: string): string[] {
@@ -358,15 +257,184 @@ function generateSearchTerms(input: ApplicantInput): string {
   return lines.join("\n");
 }
 
-// ─── Azure: generateReportAzure (Responses API + web_search tool) ──────────────
+// ─── Azure: Stage 1 — searchWithAzure ────────────────────────────────────────
 
 /**
- * Generates a background check report using the Azure OpenAI Responses API
- * with the built-in web_search tool. The model searches the web itself and
- * generates the report in one streaming call — no separate search step needed.
+ * Performs a single focused web search using the Responses API + web_search tool.
+ * Returns the full text output (with inline citations) from the model.
  *
- * Falls back to AZURE_OPENAI_ENDPOINT if set (in case the LiteLLM proxy
- * doesn't support the Responses API).
+ * @param client      - Configured OpenAI client (pointing at LiteLLM proxy)
+ * @param input       - Full text/input to pass to the Responses API
+ * @param focusPrompt - The focused search instruction for this call
+ * @param model       - Model to use (SEARCH_MODEL, default gpt-4.1)
+ */
+async function searchWithAzure(
+  client: OpenAI,
+  input: string,
+  focusPrompt: string,
+  model: string
+): Promise<string> {
+  const fullInput = `${focusPrompt}\n\n${input}`;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const response = await (client.responses.create as any)({
+    model,
+    stream: false,
+    tools: [{ type: "web_search" }],
+    input: fullInput,
+  });
+
+  // Extract text from the response output array
+  // The Responses API returns: { output: [{ type: "message", content: [{ type: "output_text", text: "..." }] }] }
+  if (response?.output && Array.isArray(response.output)) {
+    const textParts: string[] = [];
+    for (const item of response.output) {
+      if (item?.content && Array.isArray(item.content)) {
+        for (const block of item.content) {
+          if (block?.type === "output_text" && typeof block.text === "string") {
+            textParts.push(block.text);
+          }
+        }
+      }
+      // Fallback: item itself might be a text block
+      if (item?.type === "output_text" && typeof item.text === "string") {
+        textParts.push(item.text);
+      }
+    }
+    if (textParts.length > 0) return textParts.join("\n");
+  }
+
+  // Fallback: try response.output_text directly
+  if (typeof response?.output_text === "string") {
+    return response.output_text;
+  }
+
+  return "";
+}
+
+// ─── Azure: Stage 2 consolidation prompt ─────────────────────────────────────
+
+function buildConsolidationPrompt(
+  input: ApplicantInput,
+  searchResults: string
+): string {
+  const searchTerms = generateSearchTerms(input);
+
+  return `You are a Board Applicant Research Assistant for the Government of Alberta Executive Council.
+Below are raw web search results gathered about the applicant. Consolidate them into a structured background check report.
+
+IMPORTANT: Every finding must cite a source URL. The SOURCES section must list every URL actually found. Do not list sources you didn't find.
+
+APPLICANT: ${input.name}
+LOCATION: ${input.location}
+${input.role ? `ROLE: ${input.role}` : ""}
+${input.employers?.length ? `EMPLOYERS: ${input.employers.join(", ")}` : ""}
+${input.businesses?.length ? `BUSINESSES: ${input.businesses.join(", ")}` : ""}
+${input.organizations?.length ? `ORGANIZATIONS: ${input.organizations.join(", ")}` : ""}
+
+RAW SEARCH RESULTS:
+${searchResults}
+
+PRE-GENERATED SEARCH TERMS (include these verbatim in the SEARCH TERMS section):
+${searchTerms}
+
+---
+
+Generate the report in this EXACT format:
+
+${input.name.toUpperCase()} BACKGROUND CHECK
+${input.location}
+Recommendation: [Proceed / Caution / Do Not Proceed]
+
+NOTABLE ITEMS
+- [Key finding 1, with source URL]
+- [Add more as needed, or "None identified" if nothing notable]
+
+PERSONAL INFORMATION
+[Role/occupation description and any demographic details found. Cite sources.]
+
+DONATIONS
+Elections AB: [Results with source URL, or "None found"]
+Elections Canada: [Results with source URL, or "None found"]
+
+SOCIAL MEDIA/ONLINE PRESENCE
+
+Facebook:
+Account: [URL or "None"]
+Summary: [Brief summary of content found, or "No activity found"]
+Notable Posts: [Reference to Schedule A, or "None"]
+
+Instagram:
+Account: [URL or "None"]
+Summary: [Brief summary of content found, or "No activity found"]
+Notable Posts: [Reference to Schedule B, or "None"]
+
+LinkedIn:
+Account: [URL or "None"]
+Summary: [Brief summary of content found, or "No activity found"]
+Notable Posts: [Reference to Schedule C, or "None"]
+
+Twitter/X:
+Account: [URL or "None"]
+Summary: [Brief summary of content found, or "No activity found"]
+Notable Posts: [Reference to Schedule D, or "None"]
+
+YouTube:
+Account: [URL or "None"]
+Summary: [Brief summary of content found, or "No activity found"]
+
+Other:
+[Any other platforms or "None"]
+Notable Posts: [Reference to Schedule E, or "None"]
+
+SCHEDULE A – Facebook
+[List flagged posts with direct URLs, or "No flagged posts"]
+
+SCHEDULE B – Instagram
+[List flagged posts with direct URLs, or "No flagged posts"]
+
+SCHEDULE C – LinkedIn
+[List flagged posts with direct URLs, or "No flagged posts"]
+
+SCHEDULE D – Twitter/X
+[List flagged posts with direct URLs, or "No flagged posts"]
+
+SCHEDULE E – Other
+[List flagged posts with direct URLs, or "No flagged posts"]
+
+SOURCES
+[List every URL actually found during the search. Do not list sources you didn't find.]
+
+SOURCES/CHECKLIST
+✓ Professional Discipline (Law Society of Alberta, Real Estate Council of Alberta, APEGA)
+✓ Elections AB contributor search (quarterly, annual, leadership, nomination, third-party ads)
+✓ Elections Canada donation database
+✓ Google (search terms listed below)
+✓ LinkedIn (Resume Info, Top Interests, Posts, Comments, Reactions)
+✓ Twitter/X (Tweets, Replies, Media, Following, Username)
+✓ Facebook (Friends, Photos, About Info, Likes/Events, Posts, Username)
+✓ Instagram (Posts and comments, Tagged Posts, Reels, Following, Username)
+✓ YouTube
+✓ CanLii (Canadian Legal Information Institute)
+
+SEARCH TERMS
+${searchTerms}`;
+}
+
+// ─── Azure: generateReportAzure (Two-stage pipeline) ─────────────────────────
+
+/**
+ * Two-stage pipeline for the Azure/LiteLLM path:
+ *
+ * Stage 1: 3 parallel Responses API calls (SEARCH_MODEL + web_search tool)
+ *   - General info, news, professional background, employer history
+ *   - Political donations, regulatory/discipline records, court cases
+ *   - Social media profiles and activity
+ *
+ * Stage 2: Chat Completions streaming (REPORT_MODEL) consolidates search
+ *   results into the final structured report, streamed back as SSE.
+ *
+ * Progress SSE events are sent during Stage 1 so the client knows we're working.
  */
 async function generateReportAzure(
   input: ApplicantInput,
@@ -377,8 +445,6 @@ async function generateReportAzure(
     throw new Error("OPENAI_API_KEY environment variable is not set");
   }
 
-  // Use AZURE_OPENAI_ENDPOINT as baseURL if set (direct Azure endpoint),
-  // otherwise fall through to the standard OPENAI_BASE_URL (LiteLLM proxy).
   const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT;
   const baseURL = azureEndpoint ?? process.env.OPENAI_BASE_URL;
 
@@ -386,53 +452,108 @@ async function generateReportAzure(
   if (baseURL) clientOptions.baseURL = baseURL;
 
   const client = new OpenAI(clientOptions);
-  const model = options.model ?? getConfig().OPENAI_MODEL;
+  const config = getConfig();
+  const searchModel = config.SEARCH_MODEL;
+  const reportModel = options.model ?? config.REPORT_MODEL;
+  const temperature = options.temperature ?? 0.3;
 
-  const userPrompt = buildAzureReportPrompt(input);
+  // Build a compact applicant context string for search prompts
+  const nameVars = generateNameVariations(input.name);
+  const nameOrStr = nameVars.map((n) => `"${n}"`).join(" OR ");
+  const applicantCtx = [
+    `Name: ${input.name} (also try: ${nameVars.slice(1).join(", ")})`,
+    `Location: ${input.location}`,
+    input.role ? `Role: ${input.role}` : "",
+    input.employers?.length ? `Employers: ${input.employers.join(", ")}` : "",
+    input.businesses?.length ? `Businesses: ${input.businesses.join(", ")}` : "",
+    input.organizations?.length ? `Organizations: ${input.organizations.join(", ")}` : "",
+    input.emails?.length ? `Emails: ${input.emails.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  // Use Responses API with web_search tool.
-  // Cast to `any` because the OpenAI SDK types (as of v4.x) do not yet fully
-  // type the Responses API or the "web_search" tool entry — tracked upstream.
-  // TODO: remove cast once SDK types are updated to include web_search tool support.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stream = await (client.responses.create as any)({
-    model,
-    stream: true,
-    tools: [{ type: "web_search" }],
-    input: userPrompt,
-  });
+  // Focus prompts for each of the 3 parallel searches
+  const focus1 = `Search the entire internet for general information about the following applicant.
+Find: news articles, professional background, employer history, business connections, general web presence.
+Search using name variations: ${nameOrStr} AND "${input.location}".
+Be thorough and comprehensive. Cite every source with its full URL.
+
+APPLICANT INFO:
+${applicantCtx}`;
+
+  const focus2 = `Search the entire internet for political and regulatory records about the following applicant.
+Find: political donations (Elections Alberta, Elections Canada), professional discipline records,
+court cases (CanLii), regulatory filings, any involvement with professional governing bodies
+(Law Society of Alberta, RECA, APEGA, CPA Alberta, etc.).
+Search using name variations: ${nameOrStr}.
+Be thorough and comprehensive. Cite every source with its full URL.
+
+APPLICANT INFO:
+${applicantCtx}`;
+
+  const focus3 = `Search the entire internet for all social media profiles and activity for the following applicant.
+Find: LinkedIn, Facebook, Twitter/X, Instagram, YouTube profiles and posts, comments, activity.
+Look for all profile variations and usernames. Search using: ${nameOrStr}.
+Be thorough and comprehensive. Cite every profile URL and post URL found.
+
+APPLICANT INFO:
+${applicantCtx}`;
 
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for await (const event of stream) {
-          // Responses API streaming events — extract text deltas
-          // Event types: response.output_text.delta, response.completed, etc.
-          if (
-            event.type === "response.output_text.delta" &&
-            typeof event.delta === "string"
-          ) {
-            const sseMessage = `data: ${JSON.stringify({ text: event.delta })}\n\n`;
-            controller.enqueue(encoder.encode(sseMessage));
-          }
-          // Also handle content_block_delta style if proxy re-shapes events
-          else if (
-            event.type === "content_block_delta" &&
-            event.delta?.type === "text_delta" &&
-            typeof event.delta?.text === "string"
-          ) {
-            const sseMessage = `data: ${JSON.stringify({ text: event.delta.text })}\n\n`;
+        // ── Stage 1: 3 parallel web searches ──────────────────────────────
+        // Send progress event so the client knows we're searching
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ status: "Searching the web..." })}\n\n`
+          )
+        );
+
+        const [result1, result2, result3] = await Promise.all([
+          searchWithAzure(client, applicantCtx, focus1, searchModel),
+          searchWithAzure(client, applicantCtx, focus2, searchModel),
+          searchWithAzure(client, applicantCtx, focus3, searchModel),
+        ]);
+
+        const searchResults = [
+          "=== GENERAL SEARCH RESULTS ===",
+          result1,
+          "",
+          "=== POLITICAL/REGULATORY SEARCH RESULTS ===",
+          result2,
+          "",
+          "=== SOCIAL MEDIA SEARCH RESULTS ===",
+          result3,
+        ].join("\n");
+
+        // ── Stage 2: Chat Completions streaming — consolidate into report ──
+        const systemPrompt = buildSystemPrompt();
+        const consolidationPrompt = buildConsolidationPrompt(input, searchResults);
+
+        const openaiStream = await client.chat.completions.create({
+          model: reportModel,
+          temperature,
+          stream: true,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: consolidationPrompt },
+          ],
+        });
+
+        for await (const chunk of openaiStream) {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) {
+            const sseMessage = `data: ${JSON.stringify({ text: content })}\n\n`;
             controller.enqueue(encoder.encode(sseMessage));
           }
         }
+
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       } catch (error) {
-        // Emit the error as an SSE event so the client can surface it, then
-        // re-throw so the route handler's try/catch can return a proper HTTP
-        // error status (e.g. 401, 502) instead of silently closing the stream.
         const errMessage =
           error instanceof Error ? error.message : "Unknown streaming error";
         controller.enqueue(
@@ -525,7 +646,8 @@ async function generateReportChatCompletions(
  * Generates a structured background check report via OpenAI streaming.
  *
  * Routes to the correct implementation based on SEARCH_API_PROVIDER:
- *  - 'azure': Uses Responses API with web_search tool (no separate search step)
+ *  - 'azure': Two-stage pipeline — 3 parallel gpt-4.1 web searches (SEARCH_MODEL)
+ *             then gpt-5.4-pro consolidation via Chat Completions (REPORT_MODEL)
  *  - 'serp' | 'brave': Uses Chat Completions with pre-fetched researchData
  *
  * @param input - Applicant data and raw research content
