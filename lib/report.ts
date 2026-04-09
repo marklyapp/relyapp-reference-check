@@ -9,7 +9,7 @@
  *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / gpt-5.4-pro)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
- * refs #6, #30, #34
+ * refs #6, #30, #34, #36
  */
 
 import OpenAI from "openai";
@@ -43,8 +43,42 @@ export interface ApplicantInput {
 export interface GenerateReportOptions {
   /** OpenAI model to use (default: gpt-4o) */
   model?: string;
-  /** Temperature (default: 0.3 for consistent reports) */
+  /** Temperature (default: 0.3 for consistent reports; omitted for gpt-5 models) */
   temperature?: number;
+}
+
+// ─── Temperature helpers ──────────────────────────────────────────────────────
+
+/**
+ * Returns true if the model does not support the temperature parameter.
+ * gpt-5 models (e.g. gpt-5.4-pro) only accept temperature=1 via the API,
+ * so we omit temperature entirely to avoid UnsupportedParamsError.
+ */
+export function shouldOmitTemperature(model: string | undefined): boolean {
+  if (!model) return false;
+  return model.startsWith("gpt-5");
+}
+
+/**
+ * Resolves the effective temperature for a given model.
+ * Priority: explicit override > REPORT_TEMPERATURE env var > default (0.3 for gpt-4, omit for gpt-5).
+ *
+ * Returns undefined when temperature should be omitted entirely.
+ */
+export function resolveTemperature(
+  model: string | undefined,
+  override?: number
+): number | undefined {
+  // 1. Explicit call-site override always wins
+  if (override !== undefined) return override;
+
+  // 2. Config-level env var override
+  const config = getConfig();
+  if (config.REPORT_TEMPERATURE !== undefined) return config.REPORT_TEMPERATURE;
+
+  // 3. Default: omit for gpt-5, use 0.3 for everything else
+  if (shouldOmitTemperature(model)) return undefined;
+  return 0.3;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
@@ -267,18 +301,27 @@ function generateSearchTerms(input: ApplicantInput): string {
  * @param focusPrompt - The focused search instruction for this call (already contains applicant context)
  * @param model       - Model to use (SEARCH_MODEL, default gpt-4.1)
  */
-async function searchWithAzure(
+export async function searchWithAzure(
   client: OpenAI,
   focusPrompt: string,
   model: string
 ): Promise<string> {
+  // Build request params — omit temperature for gpt-5 models
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const response = await (client.responses.create as any)({
+  const params: Record<string, any> = {
     model,
     stream: false,
     tools: [{ type: "web_search" }],
     input: focusPrompt,
-  });
+  };
+
+  const temp = resolveTemperature(model);
+  if (temp !== undefined) {
+    params.temperature = temp;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const response = await (client.responses.create as any)(params);
 
   // Extract text from the response output array
   // The Responses API returns: { output: [{ type: "message", content: [{ type: "output_text", text: "..." }] }] }
@@ -451,7 +494,6 @@ async function generateReportAzure(
   const config = getConfig();
   const searchModel = config.SEARCH_MODEL;
   const reportModel = options.model ?? config.REPORT_MODEL;
-  const temperature = options.temperature ?? 0.3;
 
   // Build a compact applicant context string for search prompts
   const nameVars = generateNameVariations(input.name);
@@ -529,14 +571,17 @@ ${applicantCtx}`;
         const systemPrompt = buildSystemPrompt();
         const consolidationPrompt = buildConsolidationPrompt(input, searchResults);
 
+        // Resolve temperature — omit entirely for gpt-5 models
+        const temperature = resolveTemperature(reportModel, options.temperature);
+
         const openaiStream = await client.chat.completions.create({
           model: reportModel,
-          temperature,
-          stream: true,
+          stream: true as const,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: consolidationPrompt },
           ],
+          ...(temperature !== undefined ? { temperature } : {}),
         });
 
         for await (const chunk of openaiStream) {
@@ -589,28 +634,30 @@ async function generateReportChatCompletions(
 
   const client = new OpenAI(clientOptions);
   const model = options.model ?? getConfig().OPENAI_MODEL;
-  const temperature = options.temperature ?? 0.3;
+
+  // Resolve temperature — omit entirely for gpt-5 models
+  const temperature = resolveTemperature(model, options.temperature);
 
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildReportPrompt(input);
 
-  // Create streaming completion
-  const openaiStream = await client.chat.completions.create({
-    model,
-    temperature,
-    stream: true,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  });
-
-  // Convert OpenAI stream to a Web API ReadableStream for SSE
+  // Convert OpenAI stream to a Web API ReadableStream for SSE.
+  // The create call is inside start() so errors are surfaced as SSE error events.
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        const openaiStream = await client.chat.completions.create({
+          model,
+          stream: true as const,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          ...(temperature !== undefined ? { temperature } : {}),
+        });
+
         for await (const chunk of openaiStream) {
           const content = chunk.choices[0]?.delta?.content;
           if (content) {

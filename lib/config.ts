@@ -13,6 +13,11 @@ const envSchema = z.object({
   SEARCH_MODEL: z.string().default('gpt-4.1'),
   /** Model used for Stage 2 report consolidation (Chat Completions streaming) */
   REPORT_MODEL: z.string().default('gpt-5.4-pro'),
+  /**
+   * Override temperature for report generation.
+   * If not set: 0.3 for gpt-4 models, omitted entirely for gpt-5 models.
+   */
+  REPORT_TEMPERATURE: z.coerce.number().optional(),
 });
 
 // Refine: SEARCH_API_KEY is required for serp/brave, but not for azure
@@ -42,7 +47,13 @@ export function getConfig(): Config {
     OPENAI_MODEL: process.env.OPENAI_MODEL,
     SEARCH_MODEL: process.env.SEARCH_MODEL,
     REPORT_MODEL: process.env.REPORT_MODEL,
+    REPORT_TEMPERATURE: process.env.REPORT_TEMPERATURE,
   });
   _config = parsed as Config;
   return _config;
+}
+
+/** Reset the cached config — useful in tests when env vars change */
+export function resetConfig(): void {
+  _config = null;
 }
