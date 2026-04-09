@@ -10,6 +10,7 @@ jest.mock('../lib/config', () => ({
     OPENAI_API_KEY: 'test-openai',
     SEARCH_API_KEY: 'test-brave',
     SEARCH_API_PROVIDER: 'brave',
+    OPENAI_MODEL: 'gpt-4.1',
   }),
 }));
 
