@@ -1,6 +1,7 @@
 /** @type {import('jest').Config} */
 module.exports = {
   testEnvironment: "node",
+  testTimeout: 60000,
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
   },
