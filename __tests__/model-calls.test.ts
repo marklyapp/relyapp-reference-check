@@ -83,12 +83,14 @@ describe("resolveTemperature", () => {
     expect(resolveTemperature("gpt-4o")).toBe(0.3);
   });
 
-  it("returns explicit override for any model", () => {
-    expect(resolveTemperature("gpt-5.4-pro", 1)).toBe(1);
+  it("returns explicit override for non-gpt-5 models; gpt-5 guard still wins", () => {
+    // gpt-5 guard takes priority over all overrides — temperature always omitted
+    expect(resolveTemperature("gpt-5.4-pro", 1)).toBeUndefined();
+    // Non-gpt-5 models honour explicit override
     expect(resolveTemperature("gpt-4.1", 0.7)).toBe(0.7);
   });
 
-  it("returns REPORT_TEMPERATURE config value when set", () => {
+  it("returns REPORT_TEMPERATURE config value when set (non-gpt-5 models)", () => {
     mockGetConfig.mockReturnValue({
       OPENAI_API_KEY: "test-key",
       SEARCH_API_PROVIDER: "azure" as const,
@@ -97,7 +99,9 @@ describe("resolveTemperature", () => {
       REPORT_MODEL: "gpt-5.4-pro",
       REPORT_TEMPERATURE: 0.5,
     });
-    expect(resolveTemperature("gpt-5.4-pro")).toBe(0.5);
+    // gpt-5 guard always wins — temperature is omitted even when REPORT_TEMPERATURE is set
+    expect(resolveTemperature("gpt-5.4-pro")).toBeUndefined();
+    // Non-gpt-5 models honour the config override
     expect(resolveTemperature("gpt-4.1")).toBe(0.5);
   });
 

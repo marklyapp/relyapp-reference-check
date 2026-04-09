@@ -51,8 +51,8 @@ export interface GenerateReportOptions {
 
 /**
  * Returns true if the model does not support the temperature parameter.
- * gpt-5 models (e.g. gpt-5.4-pro) only accept temperature=1 via the API,
- * so we omit temperature entirely to avoid UnsupportedParamsError.
+ * gpt-5 models (e.g. gpt-5.4-pro) do not accept the temperature parameter at
+ * all — passing it triggers UnsupportedParamsError — so we omit it entirely.
  */
 export function shouldOmitTemperature(model: string | undefined): boolean {
   if (!model) return false;
@@ -62,6 +62,8 @@ export function shouldOmitTemperature(model: string | undefined): boolean {
 /**
  * Resolves the effective temperature for a given model.
  * Priority: explicit override > REPORT_TEMPERATURE env var > default (0.3 for gpt-4, omit for gpt-5).
+ * The gpt-5 guard always takes priority — if the model is gpt-5, temperature is
+ * omitted regardless of any configured override, preventing UnsupportedParamsError.
  *
  * Returns undefined when temperature should be omitted entirely.
  */
@@ -69,16 +71,18 @@ export function resolveTemperature(
   model: string | undefined,
   override?: number
 ): number | undefined {
-  // 1. Explicit call-site override always wins
-  if (override !== undefined) return override;
-
-  // 2. Config-level env var override
+  // Collapse desired value from: explicit override > env var config > default (0.3)
   const config = getConfig();
-  if (config.REPORT_TEMPERATURE !== undefined) return config.REPORT_TEMPERATURE;
+  const desired =
+    override !== undefined
+      ? override
+      : config.REPORT_TEMPERATURE !== undefined
+      ? config.REPORT_TEMPERATURE
+      : 0.3;
 
-  // 3. Default: omit for gpt-5, use 0.3 for everything else
+  // gpt-5 guard always wins — these models reject the temperature param entirely.
   if (shouldOmitTemperature(model)) return undefined;
-  return 0.3;
+  return desired;
 }
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
