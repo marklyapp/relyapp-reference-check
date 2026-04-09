@@ -22,7 +22,7 @@ import { NextRequest } from "next/server";
 import { parseLinkedInUrl } from "@/lib/linkedin";
 import { searchPerson, SearchPersonInput } from "@/lib/search";
 import { flagContent } from "@/lib/keywords";
-import { generateReport, ApplicantInput } from "@/lib/report";
+import { generateReport, ApplicantInput, CachedSearchResults } from "@/lib/report";
 import { getConfig } from "@/lib/config";
 
 export const maxDuration = 60;
@@ -58,6 +58,13 @@ export interface CheckRequestBody {
   phones?: string[];
   /** Optional: known addresses */
   addresses?: string[];
+  /**
+   * Optional: JSON string of cached search results from a previous run.
+   * If provided, Stage 0 (term generation) and Stage 1 (web searches) are
+   * skipped and the cached data is passed directly to Stage 2 consolidation.
+   * Useful for re-rendering/reformatting without re-running expensive searches.
+   */
+  cachedResults?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -210,9 +217,19 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   // ── Generate streaming report ─────────────────────────────────────────────
 
+  // Parse cachedResults if provided (azure path only — bypasses Stage 0+1)
+  let parsedCache: CachedSearchResults | undefined;
+  if (isAzure && body.cachedResults) {
+    try {
+      parsedCache = JSON.parse(body.cachedResults) as CachedSearchResults;
+    } catch {
+      return jsonError("Invalid cachedResults: must be a valid JSON string", 400);
+    }
+  }
+
   let reportStream: ReadableStream<Uint8Array>;
   try {
-    reportStream = await generateReport(applicantInput);
+    reportStream = await generateReport(applicantInput, {}, parsedCache);
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Report generation failed";
