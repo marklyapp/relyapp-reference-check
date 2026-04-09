@@ -37,9 +37,38 @@ const DARK_GRAY = '4A4A4A'
 const WHITE = 'FFFFFF'
 const RED_FLAG = 'CC0000'
 const AMBER_FLAG = 'FF8C00'
+const YELLOW_FLAG = 'FFD700'
 const LIGHT_RED_BG = 'FFF0F0'
 const LIGHT_AMBER_BG = 'FFF8F0'
+const LIGHT_YELLOW_BG = 'FFFFF0'
 const HYPERLINK_BLUE = '0563C1'
+
+// ─── Sensitive topics row color detection ─────────────────────────────────────
+
+const RED_TOPIC_KEYWORDS = [
+  'politician', 'political party', 'legal', 'legislative', 'ideology',
+  'fascism', 'communism', 'socialism',
+]
+const AMBER_TOPIC_KEYWORDS = [
+  'political issue', 'health policy', 'education', 'social issue',
+  'immigration', 'maid', 'gun', 'nato',
+]
+const YELLOW_TOPIC_KEYWORDS = [
+  'energy', 'environment', 'oil', 'gas', 'pipeline', 'coal', 'nuclear',
+  'wind', 'solar',
+]
+
+/**
+ * Returns the row background color for a sensitive topics table row based on
+ * the Category cell text. Returns null if no match (use default row shading).
+ */
+function getSensitiveTopicRowBg(categoryText: string): string | null {
+  const lower = categoryText.toLowerCase()
+  if (RED_TOPIC_KEYWORDS.some((k) => lower.includes(k))) return LIGHT_RED_BG
+  if (AMBER_TOPIC_KEYWORDS.some((k) => lower.includes(k))) return LIGHT_AMBER_BG
+  if (YELLOW_TOPIC_KEYWORDS.some((k) => lower.includes(k))) return LIGHT_YELLOW_BG
+  return null
+}
 
 const BULLET_REF = 'bullet-list'
 const BODY_FONT = 'Cambria'
@@ -324,7 +353,7 @@ function buildSummaryTable(sections: ParsedSection[]): Table {
   })
 }
 
-function buildMarkdownTable(tableLines: string[]): Table {
+function buildMarkdownTable(tableLines: string[], isSensitiveTopics = false): Table {
   const rows: TableRow[] = []
 
   for (let i = 0; i < tableLines.length; i++) {
@@ -332,7 +361,17 @@ function buildMarkdownTable(tableLines: string[]): Table {
     if (cells.length === 0 || cells.every((c) => /^[-:]+$/.test(c))) continue
 
     const isHeader = i === 0
-    const rowBg = isHeader ? DARK_BLUE : (i % 2 === 0 ? 'F7F9FC' : WHITE)
+    let rowBg: string
+    if (isHeader) {
+      rowBg = DARK_BLUE
+    } else if (isSensitiveTopics) {
+      // First data cell is the Category — extract it to determine color
+      const cells = tableLines[i].split('|').map((c) => c.trim()).filter(Boolean)
+      const categoryCell = cells[0] ?? ''
+      rowBg = getSensitiveTopicRowBg(categoryCell) ?? (i % 2 === 0 ? 'F7F9FC' : WHITE)
+    } else {
+      rowBg = i % 2 === 0 ? 'F7F9FC' : WHITE
+    }
     const shading = { type: ShadingType.SOLID, color: rowBg, fill: rowBg }
 
     rows.push(
@@ -439,9 +478,11 @@ function markdownToChildren(markdown: string): DocChild[] {
   let inTable = false
   let tableLines: string[] = []
 
+  let inSensitiveTopicsSection = false
+
   function flushTable() {
     if (tableLines.length === 0) return
-    children.push(buildMarkdownTable(tableLines))
+    children.push(buildMarkdownTable(tableLines, inSensitiveTopicsSection))
     children.push(new Paragraph({ text: '', spacing: { after: 120 } }))
     tableLines = []
     inTable = false
@@ -462,6 +503,12 @@ function markdownToChildren(markdown: string): DocChild[] {
     if (headingMatch) {
       const level = headingMatch[1].length
       const headingText = headingMatch[2].trim()
+      // Track whether we're in the SENSITIVE TOPICS FLAGGED section
+      if (/sensitive.topics.flagged/i.test(headingText)) {
+        inSensitiveTopicsSection = true
+      } else if (level <= 2) {
+        inSensitiveTopicsSection = false
+      }
       const headingMap: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel]> = {
         1: HeadingLevel.HEADING_1,
         2: HeadingLevel.HEADING_2,

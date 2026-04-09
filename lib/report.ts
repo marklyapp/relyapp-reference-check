@@ -5,11 +5,12 @@
  *
  * Supports two code paths:
  *  - azure: Two-stage pipeline:
- *      Stage 1 — 5 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
+ *      Stage 0 — Generate targeted sensitive search terms (Chat Completions, SEARCH_MODEL)
+ *      Stage 1 — 6 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
  *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / claude-opus-4-6)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
- * refs #6, #30, #34, #36, #45, #46
+ * refs #6, #30, #34, #36, #45, #46, #55
  */
 
 import OpenAI from "openai";
@@ -18,73 +19,57 @@ import { getConfig } from "./config";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ApplicantInput {
-  /** Full legal name */
   name: string;
-  /** City/Province or full address */
   location: string;
-  /** Optional: role/title being applied for */
   role?: string;
-  /** Optional: known employer(s) */
   employers?: string[];
-  /** Optional: businesses owned */
   businesses?: string[];
-  /** Optional: volunteer/religious organizations */
   organizations?: string[];
-  /** Optional: known email addresses */
   emails?: string[];
-  /** Optional: known phone numbers */
   phones?: string[];
-  /** Optional: known addresses */
   addresses?: string[];
-  /** Optional: known social media usernames */
   usernames?: string[];
-  /** Raw research data collected from web/social sources (used by serp/brave paths) */
   researchData: string;
 }
 
 export interface GenerateReportOptions {
-  /** OpenAI model to use (default: gpt-4o) */
   model?: string;
-  /** Temperature (default: 0.3 for consistent reports; omitted for gpt-5 models) */
   temperature?: number;
+}
+
+export interface CachedSearchResults {
+  timestamp: string;
+  applicant: { name: string; location: string };
+  generatedSearchTerms: string;
+  searches: {
+    professionalLegal: string;
+    politicalDonations: string;
+    generalWeb: string;
+    linkedin: string;
+    socialMedia: string;
+    sensitiveTopics: string;
+  };
 }
 
 // ─── Temperature helpers ──────────────────────────────────────────────────────
 
-/**
- * Returns true if the model does not support the temperature parameter.
- * gpt-5 models (e.g. gpt-5.4) only accept temperature=1 via the API, (claude-opus-4-6 accepts temperature normally — no change needed for claude-* models)
- * so we omit temperature entirely to avoid UnsupportedParamsError.
- */
 export function shouldOmitTemperature(model: string | undefined): boolean {
   if (!model) return false;
   return model.startsWith("gpt-5");
 }
 
-/**
- * Resolves the effective temperature for a given model.
- * Priority: explicit override > REPORT_TEMPERATURE env var > default (0.3 for gpt-4, omit for gpt-5).
- *
- * Returns undefined when temperature should be omitted entirely.
- */
 export function resolveTemperature(
   model: string | undefined,
   override?: number
 ): number | undefined {
-  // 1. Explicit call-site override always wins
   if (override !== undefined) return override;
-
-  // 2. Config-level env var override
   const config = getConfig();
   if (config.REPORT_TEMPERATURE !== undefined) return config.REPORT_TEMPERATURE;
-
-  // 3. Default: omit for gpt-5, use 0.3 for everything else
   if (shouldOmitTemperature(model)) return undefined;
   return 0.3;
 }
 
 // ─── Sensitive Topics List ────────────────────────────────────────────────────
-// refs #45: Added to Stage 2 consolidation prompt (azure) and serp/brave path.
 
 export const SENSITIVE_TOPICS_LIST = `SENSITIVE TOPICS TO FLAG — check ALL search results for any mention of or connection to:
 
@@ -137,24 +122,28 @@ SOCIAL ISSUES:
 // ─── Sensitive Topics Flagging Instructions ───────────────────────────────────
 
 const SENSITIVE_TOPICS_INSTRUCTIONS = `
-SENSITIVE TOPICS FLAGGING (refs #45):
+SENSITIVE TOPICS FLAGGING (refs #45, #55):
 After the NOTABLE ITEMS section, add a ## SENSITIVE TOPICS FLAGGED section.
 Cross-reference ALL search results against the sensitive topics list above and flag any matches.
 
-Output the section as a markdown table:
+Use SHORT source labels (e.g. "Wikipedia", "CBC News", "GoA", "Elections AB") instead of full URLs in the table. Full URLs go in the SOURCES section at the bottom.
+
+Use emoji prefixes for severity in the Category column:
+- 🔴 for high (Politicians, Political Party, Legal/Legislative, Ideologies, Fascism, Communism, Socialism)
+- 🟠 for medium (Political Issues, Health Policy, Education, Social Issues, Immigration, MAID, Gun Control, NATO)
+- 🟡 for contextual (Energy, Environment, Oil, Gas, Pipeline, Coal, Nuclear, Wind, Solar)
 
 ## SENSITIVE TOPICS FLAGGED
 
 | Category | Topic | Finding | Source |
 |----------|-------|---------|--------|
-| Political Party | United Conservative Party | Leader of Wildrose, merged into UCP | https://... |
-| Energy | Oil & Gas Industry | Serves as Minister of Energy and Minerals | https://... |
-| Pipelines | Trans Mountain | Publicly advocated for pipeline expansion | https://... |
+| 🔴 Political Party | UCP | Leader of Wildrose, merged into UCP in 2017 | Wikipedia |
+| 🟠 Pipelines | Trans Mountain | Publicly advocated for pipeline expansion | CBC News |
+| 🟡 Oil and Gas | Energy Minister | Current Minister since 2023 | GoA |
 
-If NO sensitive topics are found in the search results, the section should contain only:
-"No sensitive topics identified in search results."
+If NO sensitive topics are found: "No sensitive topics identified in search results."
 
-The Category column must use one of: Politicians, Political Party, Legal/Legislative, Ideology, Political Issue, Health Policy, Education, Energy/Environment, Social Issue.
+The Category column must use one of: 🔴 Politicians, 🔴 Political Party, 🔴 Legal/Legislative, 🔴 Ideology, 🟠 Political Issue, 🟠 Health Policy, 🟠 Education, 🟠 Social Issue, 🟠 Immigration, 🟠 MAID, 🟠 Gun Control, 🟠 NATO, 🟡 Energy/Environment, 🟡 Oil and Gas, 🟡 Pipeline, 🟡 Coal, 🟡 Nuclear, 🟡 Wind/Solar.
 `;
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
@@ -219,7 +208,7 @@ NOTABLE ITEMS
 
 | Category | Topic | Finding | Source |
 |----------|-------|---------|--------|
-| [Category] | [Topic matched from sensitive topics list] | [What was found] | [URL] |
+| [Category] | [Topic] | [Finding] | [Short label e.g. Wikipedia] |
 
 (If no sensitive topics found: "No sensitive topics identified in search results.")
 
@@ -234,27 +223,27 @@ SOCIAL MEDIA/ONLINE PRESENCE
 
 Facebook:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule A, or "None"]
 
 Instagram:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule B, or "None"]
 
 LinkedIn:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule C, or "None"]
 
 Twitter/X:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule D, or "None"]
 
 YouTube:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 
 Other:
 [Any other platforms or "None"]
@@ -302,19 +291,14 @@ function generateNameVariations(fullName: string): string[] {
     const last = parts[parts.length - 1];
     const middle = parts.slice(1, -1);
 
-    // First Last
     variations.push(`${first} ${last}`);
-
-    // First initial + Last
     variations.push(`${first[0]}. ${last}`);
 
-    // With middle initial if present
     if (middle.length > 0) {
       variations.push(`${first} ${middle[0][0]}. ${last}`);
       variations.push(`${first} ${middle.join(" ")} ${last}`);
     }
 
-    // Last, First
     variations.push(`${last}, ${first}`);
     variations.push(`${last} ${first}`);
   }
@@ -328,32 +312,27 @@ function generateSearchTerms(input: ApplicantInput): string {
 
   const lines: string[] = [];
 
-  // Name + location combinations
   const nameOrStr = nameVars.map((n) => `"${n}"`).join(" OR ");
   lines.push(`Names: (${nameOrStr}) AND "${location}"`);
 
-  // Name + employer
   if (input.employers?.length) {
     for (const employer of input.employers) {
       lines.push(`(${nameOrStr}) AND "${employer}"`);
     }
   }
 
-  // Name + businesses
   if (input.businesses?.length) {
     for (const biz of input.businesses) {
       lines.push(`(${nameOrStr}) AND "${biz}"`);
     }
   }
 
-  // Name + organizations
   if (input.organizations?.length) {
     for (const org of input.organizations) {
       lines.push(`(${nameOrStr}) AND "${org}"`);
     }
   }
 
-  // Emails
   if (input.emails?.length) {
     lines.push(`Emails: ${input.emails.join(", ")}`);
     for (const email of input.emails) {
@@ -361,7 +340,6 @@ function generateSearchTerms(input: ApplicantInput): string {
     }
   }
 
-  // Phone numbers
   if (input.phones?.length) {
     lines.push(`Phone Numbers: ${input.phones.join(", ")}`);
     for (const phone of input.phones) {
@@ -369,7 +347,6 @@ function generateSearchTerms(input: ApplicantInput): string {
     }
   }
 
-  // Addresses
   if (input.addresses?.length) {
     lines.push(`Addresses: ${input.addresses.join(", ")}`);
     for (const addr of input.addresses) {
@@ -382,20 +359,12 @@ function generateSearchTerms(input: ApplicantInput): string {
 
 // ─── Azure: Stage 1 — searchWithAzure ────────────────────────────────────────
 
-/**
- * Performs a single focused web search using the Responses API + web_search tool.
- * Returns the full text output (with inline citations) from the model.
- *
- * @param client      - Configured OpenAI client (pointing at LiteLLM proxy)
- * @param focusPrompt - The focused search instruction for this call (already contains applicant context)
- * @param model       - Model to use (SEARCH_MODEL, default gpt-4.1)
- */
 export async function searchWithAzure(
   client: OpenAI,
+  model: string,
   focusPrompt: string,
-  model: string
+  label?: string
 ): Promise<string> {
-  // Build request params — omit temperature for gpt-5 models
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params: Record<string, any> = {
     model,
@@ -412,8 +381,6 @@ export async function searchWithAzure(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const response = await (client.responses.create as any)(params);
 
-  // Extract text from the response output array
-  // The Responses API returns: { output: [{ type: "message", content: [{ type: "output_text", text: "..." }] }] }
   if (response?.output && Array.isArray(response.output)) {
     const textParts: string[] = [];
     for (const item of response.output) {
@@ -424,7 +391,6 @@ export async function searchWithAzure(
           }
         }
       }
-      // Fallback: item itself might be a text block
       if (item?.type === "output_text" && typeof item.text === "string") {
         textParts.push(item.text);
       }
@@ -432,30 +398,39 @@ export async function searchWithAzure(
     if (textParts.length > 0) return textParts.join("\n");
   }
 
-  // Fallback: try response.output_text directly
   if (typeof response?.output_text === "string") {
     return response.output_text;
   }
 
-  throw new Error(`searchWithAzure: no text extracted from Responses API response. model=${model}`);
+  throw new Error(`searchWithAzure(${label ?? "?"}): no text extracted from Responses API response. model=${model}`);
 }
 
 // ─── Azure: Stage 2 consolidation prompt ─────────────────────────────────────
 
 function buildConsolidationPrompt(
   input: ApplicantInput,
-  searchResults: string
+  searchResults: string,
+  generatedTerms: string
 ): string {
   const searchTerms = generateSearchTerms(input);
+
+  const generatedTermsSection = generatedTerms.trim()
+    ? `\nAI-GENERATED SENSITIVE TOPIC SEARCH TERMS:\n${generatedTerms.trim()}`
+    : "";
 
   return `You are a Board Applicant Research Assistant for the Government of Alberta Executive Council.
 Below are raw web search results gathered about the applicant. Consolidate them into a structured background check report.
 
-IMPORTANT: Every finding must cite a source URL. The SOURCES section must list every URL actually found. Do not list sources you didn't find.
+IMPORTANT: In the SENSITIVE TOPICS FLAGGED table, use SHORT source labels (e.g. "Wikipedia", "CBC News", "GoA", "Elections AB") instead of full URLs. Full URLs go in the SOURCES section.
+
+Use emoji prefixes for severity in the SENSITIVE TOPICS FLAGGED table Category column:
+- 🔴 for high (Politicians, Political Party, Legal/Legislative, Ideologies, Fascism, Communism, Socialism)
+- 🟠 for medium (Political Issues, Health Policy, Education, Social Issues, Immigration, MAID, Gun Control, NATO)
+- 🟡 for contextual (Energy, Environment, Oil, Gas, Pipeline, Coal, Nuclear, Wind, Solar)
 
 SOURCE HONESTY: For Elections Alberta, Elections Canada, and Alberta Lobbyist Registry — the web search cannot directly query these form-based databases. Use '⚠️ Web search only' status unless actual specific records (amounts, dates, recipients) were found. State 'Web search only — direct database not yet queried' if no specific records exist.
 
-FORMAT RULES: Use TABLES for structured data. Avoid paragraphs — bullets and tables only. Each source section: records found = table, no records = one line. Report must be scannable. Social media example: | Platform | Profile URL | Status | Key Findings |
+FORMAT RULES: Use TABLES for structured data. Avoid paragraphs — bullets and tables only. Each source section: records found = table, no records = one line. Report must be scannable.
 
 ${SENSITIVE_TOPICS_LIST}
 ${SENSITIVE_TOPICS_INSTRUCTIONS}
@@ -470,8 +445,9 @@ ${input.organizations?.length ? `ORGANIZATIONS: ${input.organizations.join(", ")
 RAW SEARCH RESULTS:
 ${searchResults}
 
-PRE-GENERATED SEARCH TERMS (include these verbatim in the SEARCH TERMS section):
+PRE-GENERATED SEARCH TERMS (include ALL of these verbatim in the SEARCH TERMS section):
 ${searchTerms}
+${generatedTermsSection}
 
 ---
 
@@ -482,14 +458,16 @@ ${input.location}
 Recommendation: [Proceed / Caution / Do Not Proceed]
 
 NOTABLE ITEMS
-- [Key finding 1, with source URL]
+- [Key finding 1, with source]
 - [Add more as needed, or "None identified" if nothing notable]
 
 ## SENSITIVE TOPICS FLAGGED
 
 | Category | Topic | Finding | Source |
 |----------|-------|---------|--------|
-| [Category] | [Topic matched from sensitive topics list] | [What was found] | [URL] |
+| 🔴 Political Party | UCP | Leader of Wildrose, merged into UCP in 2017 | Wikipedia |
+| 🟠 Pipelines | Trans Mountain | Publicly advocated for pipeline expansion as Energy Minister | CBC News |
+| 🟡 Oil and Gas | Energy Minister | Current Minister of Energy and Minerals since 2023 | GoA |
 
 (If no sensitive topics found: "No sensitive topics identified in search results.")
 
@@ -497,34 +475,34 @@ PERSONAL INFORMATION
 [Role/occupation description and any demographic details found. Cite sources.]
 
 DONATIONS
-Elections AB: [Results with source URL, or "None found"]
-Elections Canada: [Results with source URL, or "None found"]
+Elections AB: [Results with source, or "None found"]
+Elections Canada: [Results with source, or "None found"]
 
 SOCIAL MEDIA/ONLINE PRESENCE
 
 Facebook:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule A, or "None"]
 
 Instagram:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule B, or "None"]
 
 LinkedIn:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule C, or "None"]
 
 Twitter/X:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 Notable Posts: [Reference to Schedule D, or "None"]
 
 YouTube:
 Account: [URL or "None"]
-Summary: [Brief summary of content found, or "No activity found"]
+Summary: [Brief summary, or "No activity found"]
 
 Other:
 [Any other platforms or "None"]
@@ -547,10 +525,10 @@ SCHEDULE E – Other
 
 --- MANDATORY 10-SOURCE DETAILED FINDINGS ---
 
-Each section below MUST appear in the report. State "No records found" or "No profile found" explicitly when a source returned nothing. Every finding must cite a source URL.
+Each section below MUST appear in the report. State "No records found" or "No profile found" explicitly when a source returned nothing.
 
 ## 1. PROFESSIONAL DISCIPLINE
-[Findings from Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), APEGA, or any other professional regulatory bodies. Include disciplinary actions, suspensions, license revocations. Or "No records found."]
+[Findings from Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), APEGA, or any other professional regulatory bodies. Or "No records found."]
 
 ## 2. ELECTIONS ALBERTA
 [Donation records from efpublic.elections.ab.ca — amounts, recipients, dates. Or "No contributions found."]
@@ -562,7 +540,7 @@ Each section below MUST appear in the report. State "No records found" or "No pr
 [News articles, public records, court records, business registrations, and other general web findings. Cite all source URLs.]
 
 ## 5. LINKEDIN
-[Profile URL, work history, education, posts, articles, interests, skills, connections summary. Or "No profile found."]
+[Profile URL, work history, education, posts, articles, interests, skills. Or "No profile found."]
 
 ## 6. TWITTER/X
 [Profile URL, bio, recent tweets/replies, notable follows, media. Or "No profile found."]
@@ -577,10 +555,10 @@ Each section below MUST appear in the report. State "No records found" or "No pr
 [Channel URL, uploaded videos, comments on other videos, playlists/subscriptions. Or "No channel found."]
 
 ## 10. CANLII
-[Court cases from canlii.org — case name, citation, court, date, summary. Check as party, witness, or mentioned individual. Or "No cases found."]
+[Court cases from canlii.org — case name, citation, court, date, summary. Or "No cases found."]
 
 ## 11. ALBERTA LOBBYIST REGISTRY
-[⚠️ Web search only — albertalobbyistregistry.ca is a form-based database; web search cannot directly query it. If specific lobbying registrations (client, subject matter, dates) were found in search results, list them in a table. Otherwise: "Web search only — direct database not yet queried."]
+[⚠️ Web search only — albertalobbyistregistry.ca is a form-based database; web search cannot directly query it. If specific lobbying registrations were found in search results, list them in a table. Otherwise: "Web search only — direct database not yet queried."]
 
 --- END MANDATORY SECTIONS ---
 
@@ -600,32 +578,16 @@ SOURCES/CHECKLIST
 ✓ CanLii (Canadian Legal Information Institute)
 
 SEARCH TERMS
-${searchTerms}`;
+${searchTerms}
+${generatedTermsSection}`;
 }
 
 // ─── Azure: generateReportAzure (Two-stage pipeline) ─────────────────────────
 
-/**
- * Two-stage pipeline for the Azure/LiteLLM path:
- *
- * Stage 1: 5 parallel Responses API calls (SEARCH_MODEL + web_search tool)
- *   1. Professional & Legal (Law Society, RECA, CanLII, regulatory bodies)
- *   2. Political donations (Elections Alberta, Elections Canada)
- *   3. General web (news, public records, court cases, business registrations)
- *   4. LinkedIn (work history, posts, articles, interests)
- *   5. Social media (Twitter/X, Facebook, Instagram, YouTube)
- *
- * Stage 2: Chat Completions streaming (REPORT_MODEL) consolidates search
- *   results into the final structured report with mandatory 10-source sections,
- *   streamed back as SSE.
- *
- * Progress SSE events are sent during Stage 1 so the client knows we're working.
- *
- * refs #46
- */
 async function generateReportAzure(
   input: ApplicantInput,
-  options: GenerateReportOptions = {}
+  options: GenerateReportOptions = {},
+  cachedResults?: CachedSearchResults
 ): Promise<ReadableStream<Uint8Array>> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -643,7 +605,6 @@ async function generateReportAzure(
   const searchModel = config.SEARCH_MODEL;
   const reportModel = options.model ?? config.REPORT_MODEL;
 
-  // Build a compact applicant context string for search prompts
   const nameVars = generateNameVariations(input.name);
   const nameParts = input.name.trim().split(/\s+/);
   const firstName = nameParts[0] ?? input.name;
@@ -662,100 +623,138 @@ async function generateReportAzure(
     .filter(Boolean)
     .join("\n");
 
-  // ── Stage 1: 5 parallel web search prompts ────────────────────────────────
-  // Each prompt is RETRIEVAL ONLY — no analysis, no summarization.
-  // All analysis happens in Stage 2.
-
-  // Search 1 — Professional & Legal
-  const focus1 = `Find all information about ${input.name} from ${input.location} on: Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), CanLII (canlii.org), and any other professional regulatory bodies. Also search Alberta Lobbyist Registry (albertalobbyistregistry.ca) for any lobbying registrations. Return all results verbatim with URLs. Do not analyze or summarize.
-
-APPLICANT INFO:
-${applicantCtx}`;
-
-  // Search 2 — Political Donations
-  const focus2 = `Find all information about ${input.name} from ${input.location} on: Elections Alberta contributor search (efpublic.elections.ab.ca), Elections Canada contribution search (elections.ca/WPAPPS/WPF). Return all donation records, amounts, recipients, dates verbatim with URLs. Do not analyze or summarize.
-
-APPLICANT INFO:
-${applicantCtx}`;
-
-  // Search 3 — General Web
-  const focus3 = `Find all information about ${input.name} from ${input.location}. Search using name variations: "${firstName} ${lastName}" OR "${lastName}, ${firstName}" OR "${firstName}${lastName}". Search for news articles, public records, court cases, government records, business registrations. Return all results verbatim with URLs. Do not analyze or summarize.
-
-APPLICANT INFO:
-${applicantCtx}`;
-
-  // Search 4 — LinkedIn
-  const focus4 = `Find the LinkedIn profile for ${input.name} from ${input.location}. Return: full work history, education, posts, articles, interests, skills, connections, and profile URL. Return all information verbatim. Do not analyze or summarize.
-
-APPLICANT INFO:
-${applicantCtx}`;
-
-  // Search 5 — Social Media (Twitter, Facebook, Instagram, YouTube)
-  const focus5 = `Find all social media profiles and activity for ${input.name} from ${input.location}. For each platform return ALL of the following:
-
-Twitter/X: tweets, replies, retweets, media posts, bio, following list, follower count, username, profile URL.
-Facebook: posts, photos, about info, likes/events attended, friends (if public), profile URL.
-Instagram: posts, comments on posts, tagged posts, reels, following list, bio, profile URL.
-YouTube: channel URL, uploaded videos, playlists, comments posted on other videos.
-
-Also search for the person's name within posts and comments on these platforms (not just their profile).
-
-Return ALL information verbatim with URLs. Do not analyze or summarize.
-
-APPLICANT INFO:
-${applicantCtx}`;
-
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        // ── Stage 1: 5 parallel web searches ──────────────────────────────
-        // Send individual progress events for each search so the client can
-        // display meaningful status updates during the longer search phase.
-
         const keepalive = setInterval(() => {
           try { controller.enqueue(encoder.encode(':\n\n')); } catch {}
         }, 5000);
 
-        let result1: string, result2: string, result3: string, result4: string, result5: string;
-        try {
-          // Fire all 5 searches in parallel; send status events before awaiting
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ status: "Searching professional & legal databases..." })}\n\n`
-            )
-          );
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ status: "Searching political donation records..." })}\n\n`
-            )
-          );
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ status: "Searching the web..." })}\n\n`
-            )
-          );
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ status: "Searching LinkedIn..." })}\n\n`
-            )
-          );
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ status: "Searching social media..." })}\n\n`
-            )
-          );
+        let generatedTerms: string;
+        let result1: string, result2: string, result3: string, result4: string, result5: string, result6: string;
 
-          [result1, result2, result3, result4, result5] = await Promise.all([
-            searchWithAzure(client, focus1, searchModel),
-            searchWithAzure(client, focus2, searchModel),
-            searchWithAzure(client, focus3, searchModel),
-            searchWithAzure(client, focus4, searchModel),
-            searchWithAzure(client, focus5, searchModel),
-          ]);
-        } finally {
+        if (cachedResults) {
+          // ── Use cached results — skip Stage 0 and Stage 1 ─────────────
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ status: "Using cached search results — skipping to Stage 2..." })}\n\n`
+            )
+          );
+          generatedTerms = cachedResults.generatedSearchTerms;
+          result1 = cachedResults.searches.professionalLegal;
+          result2 = cachedResults.searches.politicalDonations;
+          result3 = cachedResults.searches.generalWeb;
+          result4 = cachedResults.searches.linkedin;
+          result5 = cachedResults.searches.socialMedia;
+          result6 = cachedResults.searches.sensitiveTopics;
           clearInterval(keepalive);
+        } else {
+          try {
+            // ── Stage 0: Generate targeted sensitive search terms ──────────
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Generating targeted search terms..." })}\n\n`
+              )
+            );
+
+            const searchTermsResponse = await client.chat.completions.create({
+              model: config.SEARCH_MODEL,
+              messages: [
+                {
+                  role: "system",
+                  content: "Generate 30 targeted web search terms that combine this person's name with sensitive political and social topics. One search term per line. No numbering, no explanations.",
+                },
+                {
+                  role: "user",
+                  content: `Subject: ${input.name}, ${input.location}.\n\nSensitive topics to cross-reference:\n${SENSITIVE_TOPICS_LIST}`,
+                },
+              ],
+              max_tokens: 500,
+            });
+            generatedTerms = searchTermsResponse.choices[0].message.content ?? "";
+
+            // ── Stage 1: 6 parallel web searches ──────────────────────────
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Searching professional & legal databases..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Searching political donation records..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Searching the web..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Searching LinkedIn..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Searching social media..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Running sensitive topics cross-reference..." })}\n\n`
+              )
+            );
+
+            // Search 1 — Professional & Legal
+            const focus1 = `Find all information about ${input.name} from ${input.location} on: Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), CanLII (canlii.org), and any other professional regulatory bodies. Also search Alberta Lobbyist Registry (albertalobbyistregistry.ca) for any lobbying registrations. Return all results verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+
+            // Search 2 — Political Donations
+            const focus2 = `Find all information about ${input.name} from ${input.location} on: Elections Alberta contributor search (efpublic.elections.ab.ca), Elections Canada contribution search (elections.ca/WPAPPS/WPF). Return all donation records, amounts, recipients, dates verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+
+            // Search 3 — General Web
+            const focus3 = `Find all information about ${input.name} from ${input.location}. Search using name variations: "${firstName} ${lastName}" OR "${lastName}, ${firstName}" OR "${firstName}${lastName}". Search for news articles, public records, court cases, government records, business registrations. Return all results verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+
+            // Search 4 — LinkedIn
+            const focus4 = `Find the LinkedIn profile for ${input.name} from ${input.location}. Return: full work history, education, posts, articles, interests, skills, connections, and profile URL. Return all information verbatim. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+
+            // Search 5 — Social Media
+            const focus5 = `Find all social media profiles and activity for ${input.name} from ${input.location}. For each platform return ALL of the following:\n\nTwitter/X: tweets, replies, retweets, media posts, bio, following list, follower count, username, profile URL.\nFacebook: posts, photos, about info, likes/events attended, friends (if public), profile URL.\nInstagram: posts, comments on posts, tagged posts, reels, following list, bio, profile URL.\nYouTube: channel URL, uploaded videos, playlists, comments posted on other videos.\n\nAlso search for the person's name within posts and comments on these platforms (not just their profile).\n\nReturn ALL information verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+
+            // Search 6 — Sensitive Topics Cross-Reference (uses Stage 0 generated terms)
+            const focus6 = `Search the web for EACH of the following search terms. Return ALL results found with URLs. Do not analyze or summarize.\n\nSearch terms:\n${generatedTerms}`;
+
+            [result1, result2, result3, result4, result5, result6] = await Promise.all([
+              searchWithAzure(client, searchModel, focus1, 'professional-legal'),
+              searchWithAzure(client, searchModel, focus2, 'political-donations'),
+              searchWithAzure(client, searchModel, focus3, 'general-web'),
+              searchWithAzure(client, searchModel, focus4, 'linkedin'),
+              searchWithAzure(client, searchModel, focus5, 'social-media'),
+              searchWithAzure(client, searchModel, focus6, 'sensitive-topics-cross-reference'),
+            ]);
+          } finally {
+            clearInterval(keepalive);
+          }
+
+          // Cache raw search results — send as SSE event so client can store for re-rendering
+          const cacheData: CachedSearchResults = {
+            timestamp: new Date().toISOString(),
+            applicant: { name: input.name, location: input.location },
+            generatedSearchTerms: generatedTerms,
+            searches: {
+              professionalLegal: result1,
+              politicalDonations: result2,
+              generalWeb: result3,
+              linkedin: result4,
+              socialMedia: result5,
+              sensitiveTopics: result6,
+            },
+          };
+
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ cache: cacheData })}\n\n`)
+          );
         }
 
         const searchResults = [
@@ -773,13 +772,15 @@ ${applicantCtx}`;
           "",
           "=== SOCIAL MEDIA SEARCH RESULTS ===",
           result5,
+          "",
+          "=== SENSITIVE TOPICS CROSS-REFERENCE RESULTS ===",
+          result6,
         ].join("\n");
 
-        // ── Stage 2: Chat Completions streaming — consolidate into report ──
+        // Stage 2: Chat Completions streaming — consolidate into report
         const systemPrompt = buildSystemPrompt();
-        const consolidationPrompt = buildConsolidationPrompt(input, searchResults);
+        const consolidationPrompt = buildConsolidationPrompt(input, searchResults, generatedTerms);
 
-        // Resolve temperature — omit entirely for gpt-5 models
         const temperature = resolveTemperature(reportModel, options.temperature);
 
         const openaiStream = await client.chat.completions.create({
@@ -820,14 +821,6 @@ ${applicantCtx}`;
 
 // ─── generateReport (Chat Completions path — serp/brave) ──────────────────────
 
-/**
- * Generates a structured background check report via OpenAI Chat Completions streaming.
- * Used when SEARCH_API_PROVIDER is 'serp' or 'brave' (pre-fetched research data).
- *
- * @param input - Applicant data and raw research content
- * @param options - Optional model/temperature overrides
- * @returns A ReadableStream of SSE-formatted text chunks
- */
 async function generateReportChatCompletions(
   input: ApplicantInput,
   options: GenerateReportOptions = {}
@@ -844,14 +837,11 @@ async function generateReportChatCompletions(
   const client = new OpenAI(clientOptions);
   const model = options.model ?? getConfig().OPENAI_MODEL;
 
-  // Resolve temperature — omit entirely for gpt-5 models
   const temperature = resolveTemperature(model, options.temperature);
 
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildReportPrompt(input);
 
-  // Convert OpenAI stream to a Web API ReadableStream for SSE.
-  // The create call is inside start() so errors are surfaced as SSE error events.
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream<Uint8Array>({
@@ -871,12 +861,10 @@ async function generateReportChatCompletions(
         for await (const chunk of openaiStream) {
           const content = chunk.choices[0]?.delta?.content;
           if (content) {
-            // SSE format: data: <content>\n\n
             const sseMessage = `data: ${JSON.stringify({ text: content })}\n\n`;
             controller.enqueue(encoder.encode(sseMessage));
           }
         }
-        // Send [DONE] signal unconditionally after stream ends
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       } catch (error) {
@@ -895,34 +883,15 @@ async function generateReportChatCompletions(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Generates a structured background check report via OpenAI streaming.
- *
- * Routes to the correct implementation based on SEARCH_API_PROVIDER
- *  - 'azure': Two-stage pipeline — 5 parallel gpt-4.1 web searches (SEARCH_MODEL)
- *             then consolidation via Chat Completions streaming (REPORT_MODEL)
- *  - 'serp' | 'brave': Uses Chat Completions with pre-fetched researchData
- *
- * @param input - Applicant data and raw research content
- * @param options - Optional model/temperature overrides
- * @returns A ReadableStream of SSE-formatted text chunks
- *
- * @example
- * const stream = await generateReport({
- *   name: "Homer Simpson",
- *   location: "Springfield, AB",
- *   researchData: "",
- * });
- * // Pipe stream to HTTP response for SSE consumption
- */
 export async function generateReport(
   input: ApplicantInput,
-  options: GenerateReportOptions = {}
+  options: GenerateReportOptions = {},
+  cachedResults?: CachedSearchResults
 ): Promise<ReadableStream<Uint8Array>> {
   const config = getConfig();
 
   if (config.SEARCH_API_PROVIDER === "azure") {
-    return generateReportAzure(input, options);
+    return generateReportAzure(input, options, cachedResults);
   }
 
   return generateReportChatCompletions(input, options);
