@@ -2,7 +2,7 @@
  * lib/report.test.ts
  * Unit tests for generateReport() and ApplicantInput types.
  *
- * refs #6, #30, #36
+ * refs #6, #30, #36, #46
  */
 
 // ─── Mock OpenAI before imports ───────────────────────────────────────────────
@@ -234,7 +234,7 @@ test("generateReport uses Responses API when provider is azure", async () => {
     REPORT_TEMPERATURE: undefined,
   });
 
-  // Stage 1: 3 parallel Responses API calls
+  // Stage 1: 5 parallel Responses API calls
   const stageOneResponse = fakeResponsesObject("Search results here");
   mockResponsesCreate.mockResolvedValue(stageOneResponse);
 
@@ -246,8 +246,8 @@ test("generateReport uses Responses API when provider is azure", async () => {
   const stream = await generateReport(MINIMAL_INPUT);
   expect(stream).toBeInstanceOf(ReadableStream);
 
-  // Must have called responses.create for Stage 1 (3 parallel searches)
-  expect(mockResponsesCreate).toHaveBeenCalled();
+  // Must have called responses.create for Stage 1 (5 parallel searches)
+  expect(mockResponsesCreate).toHaveBeenCalledTimes(5);
   // Stage 2 consolidates via chat completions
   expect(mockCreate).toHaveBeenCalled();
 });
@@ -408,4 +408,141 @@ test("generateReport prompt includes employer in search terms (serp path)", asyn
   const callArgs = mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0];
   const userMessage = callArgs.messages.find((m: { role: string }) => m.role === "user");
   expect(userMessage.content).toContain("Springfield Nuclear Power Plant");
+});
+
+// ─── Issue #46: 5 parallel searches and 10-source sections ───────────────────
+
+test("azure path makes exactly 5 Responses API calls (5 parallel searches)", async () => {
+  mockedGetConfig.mockReturnValue({
+    OPENAI_API_KEY: "sk-test-mock",
+    SEARCH_API_PROVIDER: "azure",
+    SEARCH_MODEL: "gpt-4.1",
+    REPORT_MODEL: "gpt-5.4-pro",
+    REPORT_TEMPERATURE: undefined,
+  });
+
+  mockResponsesCreate.mockResolvedValue(fakeResponsesObject("results"));
+  mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
+
+  await generateReport(MINIMAL_INPUT);
+
+  expect(mockResponsesCreate).toHaveBeenCalledTimes(5);
+});
+
+test("azure path search prompts include retrieval-only instruction", async () => {
+  mockedGetConfig.mockReturnValue({
+    OPENAI_API_KEY: "sk-test-mock",
+    SEARCH_API_PROVIDER: "azure",
+    SEARCH_MODEL: "gpt-4.1",
+    REPORT_MODEL: "gpt-5.4-pro",
+    REPORT_TEMPERATURE: undefined,
+  });
+
+  mockResponsesCreate.mockResolvedValue(fakeResponsesObject("results"));
+  mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
+
+  await generateReport(MINIMAL_INPUT);
+
+  // Every search prompt must include "Do not analyze or summarize"
+  for (const call of mockResponsesCreate.mock.calls) {
+    expect(call[0].input).toContain("Do not analyze or summarize");
+  }
+});
+
+test("azure path search prompts cover all required sources", async () => {
+  mockedGetConfig.mockReturnValue({
+    OPENAI_API_KEY: "sk-test-mock",
+    SEARCH_API_PROVIDER: "azure",
+    SEARCH_MODEL: "gpt-4.1",
+    REPORT_MODEL: "gpt-5.4-pro",
+    REPORT_TEMPERATURE: undefined,
+  });
+
+  mockResponsesCreate.mockResolvedValue(fakeResponsesObject("results"));
+  mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
+
+  await generateReport(MINIMAL_INPUT);
+
+  const allInputs = mockResponsesCreate.mock.calls.map((c) => c[0].input).join(" ");
+  // Search 1: professional & legal
+  expect(allInputs).toContain("lsa.ca");
+  expect(allInputs).toContain("reca.ca");
+  expect(allInputs).toContain("canlii.org");
+  // Search 2: political donations
+  expect(allInputs).toContain("efpublic.elections.ab.ca");
+  expect(allInputs).toContain("elections.ca");
+  // Search 3: general web
+  expect(allInputs).toContain("news articles");
+  // Search 4: LinkedIn
+  expect(allInputs).toContain("LinkedIn");
+  // Search 5: social media
+  expect(allInputs).toContain("Twitter");
+  expect(allInputs).toContain("Facebook");
+  expect(allInputs).toContain("Instagram");
+  expect(allInputs).toContain("YouTube");
+});
+
+test("azure path consolidation prompt requires all 10 source sections", async () => {
+  mockedGetConfig.mockReturnValue({
+    OPENAI_API_KEY: "sk-test-mock",
+    SEARCH_API_PROVIDER: "azure",
+    SEARCH_MODEL: "gpt-4.1",
+    REPORT_MODEL: "gpt-5.4-pro",
+    REPORT_TEMPERATURE: undefined,
+  });
+
+  mockResponsesCreate.mockResolvedValue(fakeResponsesObject("results"));
+  mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
+
+  await generateReport(MINIMAL_INPUT);
+
+  const callArgs = mockCreate.mock.calls[0][0];
+  const userMsg = callArgs.messages.find((m: { role: string }) => m.role === "user").content;
+
+  // All 10 mandatory sections must be in the consolidation prompt
+  expect(userMsg).toContain("## 1. PROFESSIONAL DISCIPLINE");
+  expect(userMsg).toContain("## 2. ELECTIONS ALBERTA");
+  expect(userMsg).toContain("## 3. ELECTIONS CANADA");
+  expect(userMsg).toContain("## 4. GOOGLE SEARCH RESULTS");
+  expect(userMsg).toContain("## 5. LINKEDIN");
+  expect(userMsg).toContain("## 6. TWITTER/X");
+  expect(userMsg).toContain("## 7. FACEBOOK");
+  expect(userMsg).toContain("## 8. INSTAGRAM");
+  expect(userMsg).toContain("## 9. YOUTUBE");
+  expect(userMsg).toContain("## 10. CANLII");
+});
+
+test("ApplicantInput accepts optional usernames field", () => {
+  const input: ApplicantInput = {
+    name: "Jane Doe",
+    location: "Edmonton, AB",
+    researchData: "",
+    usernames: ["janedoe99", "jdoe_ab"],
+  };
+  expect(input.usernames).toContain("janedoe99");
+  expect(input.usernames).toContain("jdoe_ab");
+});
+
+test("azure path includes known usernames in applicant context when provided", async () => {
+  mockedGetConfig.mockReturnValue({
+    OPENAI_API_KEY: "sk-test-mock",
+    SEARCH_API_PROVIDER: "azure",
+    SEARCH_MODEL: "gpt-4.1",
+    REPORT_MODEL: "gpt-5.4-pro",
+    REPORT_TEMPERATURE: undefined,
+  });
+
+  mockResponsesCreate.mockResolvedValue(fakeResponsesObject("results"));
+  mockCreate.mockResolvedValueOnce(fakeStream(["Done"]));
+
+  const inputWithUsernames: ApplicantInput = {
+    ...MINIMAL_INPUT,
+    usernames: ["homer_d", "donut_king"],
+  };
+
+  await generateReport(inputWithUsernames);
+
+  const allInputs = mockResponsesCreate.mock.calls.map((c) => c[0].input).join(" ");
+  expect(allInputs).toContain("homer_d");
+  expect(allInputs).toContain("donut_king");
 });
