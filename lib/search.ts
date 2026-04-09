@@ -275,6 +275,10 @@ export async function searchPerson(input: SearchPersonInput): Promise<SearchPers
   const config = getConfig();
   const { SEARCH_API_KEY: apiKey, SEARCH_API_PROVIDER: provider } = config;
 
+  if (!apiKey) {
+    throw new Error('SEARCH_API_KEY is required for serp/brave search providers');
+  }
+
   const sourceList = sources(input);
   const allResults: SearchResult[] = [];
   const allErrors: SearchPersonResult['errors'] = [];
