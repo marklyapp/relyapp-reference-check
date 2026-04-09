@@ -175,6 +175,8 @@ Report Format Rules:
 - SOURCES/CHECKLIST uses checkmarks (✓) for sources that were searched
 - SEARCH TERMS uses OR/AND operators with name variations
 
+SOURCE HONESTY: For Elections Alberta, Elections Canada, and Alberta Lobbyist Registry — the web search cannot directly query these form-based databases. Use '⚠️ Web search only' status unless actual specific records (amounts, dates, recipients) were found. State 'Web search only — direct database not yet queried' if no specific records exist.
+
 ${SENSITIVE_TOPICS_LIST}
 ${SENSITIVE_TOPICS_INSTRUCTIONS}`;
 }
@@ -451,6 +453,10 @@ Below are raw web search results gathered about the applicant. Consolidate them 
 
 IMPORTANT: Every finding must cite a source URL. The SOURCES section must list every URL actually found. Do not list sources you didn't find.
 
+SOURCE HONESTY: For Elections Alberta, Elections Canada, and Alberta Lobbyist Registry — the web search cannot directly query these form-based databases. Use '⚠️ Web search only' status unless actual specific records (amounts, dates, recipients) were found. State 'Web search only — direct database not yet queried' if no specific records exist.
+
+FORMAT RULES: Use TABLES for structured data. Avoid paragraphs — bullets and tables only. Each source section: records found = table, no records = one line. Report must be scannable. Social media example: | Platform | Profile URL | Status | Key Findings |
+
 ${SENSITIVE_TOPICS_LIST}
 ${SENSITIVE_TOPICS_INSTRUCTIONS}
 
@@ -573,6 +579,9 @@ Each section below MUST appear in the report. State "No records found" or "No pr
 ## 10. CANLII
 [Court cases from canlii.org — case name, citation, court, date, summary. Check as party, witness, or mentioned individual. Or "No cases found."]
 
+## 11. ALBERTA LOBBYIST REGISTRY
+[⚠️ Web search only — albertalobbyistregistry.ca is a form-based database; web search cannot directly query it. If specific lobbying registrations (client, subject matter, dates) were found in search results, list them in a table. Otherwise: "Web search only — direct database not yet queried."]
+
 --- END MANDATORY SECTIONS ---
 
 SOURCES
@@ -658,7 +667,7 @@ async function generateReportAzure(
   // All analysis happens in Stage 2.
 
   // Search 1 — Professional & Legal
-  const focus1 = `Find all information about ${input.name} from ${input.location} on: Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), CanLII (canlii.org), and any other professional regulatory bodies. Return all results verbatim with URLs. Do not analyze or summarize.
+  const focus1 = `Find all information about ${input.name} from ${input.location} on: Law Society of Alberta (lsa.ca), Real Estate Council of Alberta (reca.ca), CanLII (canlii.org), and any other professional regulatory bodies. Also search Alberta Lobbyist Registry (albertalobbyistregistry.ca) for any lobbying registrations. Return all results verbatim with URLs. Do not analyze or summarize.
 
 APPLICANT INFO:
 ${applicantCtx}`;
@@ -682,7 +691,16 @@ APPLICANT INFO:
 ${applicantCtx}`;
 
   // Search 5 — Social Media (Twitter, Facebook, Instagram, YouTube)
-  const focus5 = `Find all social media profiles for ${input.name} from ${input.location} on Twitter/X, Facebook, Instagram, and YouTube. Return: profile URLs, bios, recent posts, followers/following, media, comments, tagged content. Return all information verbatim with URLs. Do not analyze or summarize.
+  const focus5 = `Find all social media profiles and activity for ${input.name} from ${input.location}. For each platform return ALL of the following:
+
+Twitter/X: tweets, replies, retweets, media posts, bio, following list, follower count, username, profile URL.
+Facebook: posts, photos, about info, likes/events attended, friends (if public), profile URL.
+Instagram: posts, comments on posts, tagged posts, reels, following list, bio, profile URL.
+YouTube: channel URL, uploaded videos, playlists, comments posted on other videos.
+
+Also search for the person's name within posts and comments on these platforms (not just their profile).
+
+Return ALL information verbatim with URLs. Do not analyze or summarize.
 
 APPLICANT INFO:
 ${applicantCtx}`;
