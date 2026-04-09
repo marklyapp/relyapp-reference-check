@@ -6,7 +6,7 @@
  * Supports two code paths:
  *  - azure: Two-stage pipeline:
  *      Stage 1 — 5 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
- *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / gpt-5.4)
+ *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / claude-opus-4-6)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
  * refs #6, #30, #34, #36, #46
@@ -53,7 +53,7 @@ export interface GenerateReportOptions {
 
 /**
  * Returns true if the model does not support the temperature parameter.
- * gpt-5 models (e.g. gpt-5.4) only accept temperature=1 via the API,
+ * gpt-5 models (e.g. gpt-5.4) only accept temperature=1 via the API, (claude-opus-4-6 accepts temperature normally — no change needed for claude-* models)
  * so we omit temperature entirely to avoid UnsupportedParamsError.
  */
 export function shouldOmitTemperature(model: string | undefined): boolean {

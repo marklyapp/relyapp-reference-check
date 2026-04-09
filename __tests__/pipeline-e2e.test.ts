@@ -49,9 +49,9 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
     expect(text.toLowerCase()).toContain('brian jean');
   });
 
-  test('Stage 2: gpt-5.4-pro consolidation works without temperature', async () => {
+  test('Stage 2: claude-opus-4-6 consolidation works with temperature', async () => {
     const response = await client.chat.completions.create({
-      model: 'gpt-5.4-pro',
+      model: 'claude-opus-4-6',
       messages: [
         { role: 'system', content: 'Summarize the following research data into a brief report.' },
         {
@@ -61,7 +61,7 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
         },
       ],
       max_tokens: 16000,
-      // NO temperature — gpt-5 doesn't support it
+      // claude-opus-4-6 accepts temperature (0-1 range)
     });
 
     expect(response.choices[0].message.content).toBeTruthy();
@@ -103,7 +103,7 @@ describeIfApi('Pipeline E2E — Brian Jean', () => {
     // Stage 2: consolidate
     const combined = searches.join('\n\n---\n\n');
     const report = await client.chat.completions.create({
-      model: 'gpt-5.4-pro',
+      model: 'claude-opus-4-6',
       messages: [
         {
           role: 'system',

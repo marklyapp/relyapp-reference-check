@@ -12,7 +12,7 @@ const envSchema = z.object({
   /** Model used for Stage 1 web search (Responses API + web_search tool) */
   SEARCH_MODEL: z.string().default('gpt-4.1'),
   /** Model used for Stage 2 report consolidation (Chat Completions streaming) */
-  REPORT_MODEL: z.string().default('gpt-5.4'),
+  REPORT_MODEL: z.string().default('claude-opus-4-6'),
   /**
    * Override temperature for report generation.
    * If not set: 0.3 for gpt-4 models, omitted entirely for gpt-5 models.
