@@ -25,6 +25,8 @@ import { flagContent } from "@/lib/keywords";
 import { generateReport, ApplicantInput } from "@/lib/report";
 import { getConfig } from "@/lib/config";
 
+export const maxDuration = 60;
+
 // ─── Request body ─────────────────────────────────────────────────────────────
 
 export interface CheckRequestBody {
