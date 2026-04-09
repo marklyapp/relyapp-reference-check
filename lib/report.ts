@@ -390,9 +390,12 @@ async function generateReportAzure(
 
   const userPrompt = buildAzureReportPrompt(input);
 
-  // Use Responses API with web_search tool
-  // Type assertion needed because the SDK types may not yet include all tool types
-  const stream = await (client.responses.create as Function)({
+  // Use Responses API with web_search tool.
+  // Cast to `any` because the OpenAI SDK types (as of v4.x) do not yet fully
+  // type the Responses API or the "web_search" tool entry — tracked upstream.
+  // TODO: remove cast once SDK types are updated to include web_search tool support.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stream = await (client.responses.create as any)({
     model,
     stream: true,
     tools: [{ type: "web_search" }],
@@ -418,7 +421,7 @@ async function generateReportAzure(
           else if (
             event.type === "content_block_delta" &&
             event.delta?.type === "text_delta" &&
-            typeof event.delta.text === "string"
+            typeof event.delta?.text === "string"
           ) {
             const sseMessage = `data: ${JSON.stringify({ text: event.delta.text })}\n\n`;
             controller.enqueue(encoder.encode(sseMessage));
@@ -427,12 +430,16 @@ async function generateReportAzure(
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       } catch (error) {
+        // Emit the error as an SSE event so the client can surface it, then
+        // re-throw so the route handler's try/catch can return a proper HTTP
+        // error status (e.g. 401, 502) instead of silently closing the stream.
         const errMessage =
           error instanceof Error ? error.message : "Unknown streaming error";
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify({ error: errMessage })}\n\n`)
         );
         controller.close();
+        throw error;
       }
     },
   });
