@@ -589,6 +589,7 @@ ${applicantCtx}`;
             { role: "system", content: systemPrompt },
             { role: "user", content: consolidationPrompt },
           ],
+          max_tokens: 16000,
           ...(temperature !== undefined ? { temperature } : {}),
         });
 
@@ -663,6 +664,7 @@ async function generateReportChatCompletions(
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
+          max_tokens: 16000,
           ...(temperature !== undefined ? { temperature } : {}),
         });
 
