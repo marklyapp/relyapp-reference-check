@@ -6,11 +6,11 @@
  * Supports two code paths:
  *  - azure: Two-stage pipeline:
  *      Stage 0 — Generate targeted sensitive search terms (Chat Completions, SEARCH_MODEL)
- *      Stage 1 — 6 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
+ *      Stage 1 — 8 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
  *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / claude-opus-4-6)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
- * refs #6, #30, #34, #36, #45, #46, #55
+ * refs #6, #30, #34, #36, #45, #46, #55, #59
  */
 
 import OpenAI from "openai";
@@ -633,7 +633,8 @@ async function generateReportAzure(
         }, 5000);
 
         let generatedTerms: string;
-        let result1: string, result2: string, result3: string, result4: string, result5: string, result6: string;
+        let result1: string, result2: string, result3: string, result4: string, result5: string;
+        let result6a: string, result6b: string, result6c: string;
 
         if (cachedResults) {
           // ── Use cached results — skip Stage 0 and Stage 1 ─────────────
@@ -648,7 +649,10 @@ async function generateReportAzure(
           result3 = cachedResults.searches.generalWeb;
           result4 = cachedResults.searches.linkedin;
           result5 = cachedResults.searches.socialMedia;
-          result6 = cachedResults.searches.sensitiveTopics;
+          // sensitiveTopics in cache is the merged result of all 3 batches
+          result6a = cachedResults.searches.sensitiveTopics;
+          result6b = "";
+          result6c = "";
           clearInterval(keepalive);
         } else {
           try {
@@ -675,7 +679,16 @@ async function generateReportAzure(
             });
             generatedTerms = searchTermsResponse.choices[0].message.content ?? "";
 
-            // ── Stage 1: 6 parallel web searches ──────────────────────────
+            // ── Split generatedTerms into 3 batches of 10 for parallel execution (refs #59) ──
+            const termLines = generatedTerms
+              .split("\n")
+              .map((l) => l.trim())
+              .filter(Boolean);
+            const batch1 = termLines.slice(0, 10).join("\n");
+            const batch2 = termLines.slice(10, 20).join("\n");
+            const batch3 = termLines.slice(20, 30).join("\n");
+
+            // ── Stage 1: 8 parallel web searches (refs #59) ─────────────────────────
             controller.enqueue(
               encoder.encode(
                 `data: ${JSON.stringify({ status: "Searching professional & legal databases..." })}\n\n`
@@ -693,17 +706,27 @@ async function generateReportAzure(
             );
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ status: "Searching LinkedIn..." })}\n\n`
+                `data: ${JSON.stringify({ status: "Searching professional background & career history..." })}\n\n`
               )
             );
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ status: "Searching social media..." })}\n\n`
+                `data: ${JSON.stringify({ status: "Searching social media coverage & public statements..." })}\n\n`
               )
             );
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ status: "Running sensitive topics cross-reference..." })}\n\n`
+                `data: ${JSON.stringify({ status: "Running sensitive topics cross-reference (batch 1 of 3)..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Running sensitive topics cross-reference (batch 2 of 3)..." })}\n\n`
+              )
+            );
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "Running sensitive topics cross-reference (batch 3 of 3)..." })}\n\n`
               )
             );
 
@@ -716,28 +739,40 @@ async function generateReportAzure(
             // Search 3 — General Web
             const focus3 = `Find all information about ${input.name} from ${input.location}. Search using name variations: "${firstName} ${lastName}" OR "${lastName}, ${firstName}" OR "${firstName}${lastName}". Search for news articles, public records, court cases, government records, business registrations. Return all results verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
 
-            // Search 4 — LinkedIn
-            const focus4 = `Find the LinkedIn profile for ${input.name} from ${input.location}. Return: full work history, education, posts, articles, interests, skills, connections, and profile URL. Return all information verbatim. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+            // Search 4 — LinkedIn (reframed to avoid refusals — refs #59)
+            const focus4 = `Search for the professional background, career history, education, and business activities of ${input.name} from ${input.location}. Look for professional directory listings, company bios, conference speaker profiles, board memberships, and any public career information. Include employment history, educational institutions, professional certifications, and published articles or presentations. Return all findings verbatim with URLs.\n\nAPPLICANT INFO:\n${applicantCtx}`;
 
-            // Search 5 — Social Media
-            const focus5 = `Find all social media profiles, posts, and activity for ${input.name} from ${input.location}. Use these specific searches:\n\n1. site:twitter.com "${input.name}" — Find all indexed tweets by or mentioning this person\n2. site:x.com "${input.name}" — Same for X\n3. site:facebook.com "${input.name}" ${input.location} — Find Facebook posts, profile, photos\n4. site:instagram.com "${input.name}" — Find Instagram posts, profile\n5. site:youtube.com "${input.name}" — Find YouTube videos, channel, comments\n6. site:linkedin.com "${input.name}" — Find LinkedIn activity beyond profile\n7. site:reddit.com "${input.name}" — Find Reddit mentions\n8. "${input.name}" social media OR twitter OR facebook OR instagram\n9. "@{username}" if any username is discovered during search\n\nFor EACH platform found, return:\n- Profile URL\n- Bio/about text\n- Recent posts (last 20 if available) with dates and content\n- Follower/following counts\n- Any media (photos, videos) descriptions\n- Comments and replies\n\nReturn ALL information verbatim with URLs. Do not analyze or summarize.\n\nAPPLICANT INFO:\n${applicantCtx}`;
+            // Search 5 — Social Media (reframed to avoid refusals — refs #59)
+            const focus5 = `Search for public statements, commentary, and online activity by ${input.name} from ${input.location} across social media platforms. Look for:\n- News articles quoting their social media posts\n- Public tweets or X posts reported in media\n- Facebook posts or statements covered in news\n- YouTube videos featuring or by this person\n- Reddit threads discussing this person\n- Any viral or controversial social media moments\n- Public commentary on political or social issues\nReturn all findings verbatim with URLs.\n\nAPPLICANT INFO:\n${applicantCtx}`;
 
-            // Search 6 — Sensitive Topics Cross-Reference (uses Stage 0 generated terms)
-            const focus6 = `Search the web for EACH of the following search terms. Return ALL results found with URLs. Do not analyze or summarize.\n\nSearch terms:\n${generatedTerms}`;
+            // Search 6a/6b/6c — Sensitive Topics Cross-Reference split into 3 batches of 10 (refs #59)
+            // Each batch is a separate parallel call to prevent the model from stopping early
+            const focus6a = `Search the web for EACH of the following search terms. Return ALL results found with URLs. Do not analyze or summarize.\n\nSearch terms:\n${batch1}`;
+            const focus6b = `Search the web for EACH of the following search terms. Return ALL results found with URLs. Do not analyze or summarize.\n\nSearch terms:\n${batch2}`;
+            const focus6c = `Search the web for EACH of the following search terms. Return ALL results found with URLs. Do not analyze or summarize.\n\nSearch terms:\n${batch3}`;
 
-            [result1, result2, result3, result4, result5, result6] = await Promise.all([
+            [result1, result2, result3, result4, result5, result6a, result6b, result6c] = await Promise.all([
               searchWithAzure(client, searchModel, focus1, 'professional-legal'),
               searchWithAzure(client, searchModel, focus2, 'political-donations'),
               searchWithAzure(client, searchModel, focus3, 'general-web'),
               searchWithAzure(client, searchModel, focus4, 'linkedin'),
               searchWithAzure(client, searchModel, focus5, 'social-media'),
-              searchWithAzure(client, searchModel, focus6, 'sensitive-topics-cross-reference'),
+              searchWithAzure(client, searchModel, focus6a, 'sensitive-topics-batch-1'),
+              searchWithAzure(client, searchModel, focus6b, 'sensitive-topics-batch-2'),
+              searchWithAzure(client, searchModel, focus6c, 'sensitive-topics-batch-3'),
             ]);
           } finally {
             clearInterval(keepalive);
           }
 
           // Cache raw search results — send as SSE event so client can store for re-rendering
+          // Merge all 3 sensitive batches into one combined string for the cache
+          const mergedSensitiveTopics = [
+            result6a ? `=== SENSITIVE TOPICS BATCH 1 ===\n${result6a}` : "",
+            result6b ? `\n=== SENSITIVE TOPICS BATCH 2 ===\n${result6b}` : "",
+            result6c ? `\n=== SENSITIVE TOPICS BATCH 3 ===\n${result6c}` : "",
+          ].filter(Boolean).join("\n");
+
           const cacheData: CachedSearchResults = {
             timestamp: new Date().toISOString(),
             applicant: { name: input.name, location: input.location },
@@ -748,7 +783,7 @@ async function generateReportAzure(
               generalWeb: result3,
               linkedin: result4,
               socialMedia: result5,
-              sensitiveTopics: result6,
+              sensitiveTopics: mergedSensitiveTopics,
             },
           };
 
@@ -756,6 +791,15 @@ async function generateReportAzure(
             encoder.encode(`data: ${JSON.stringify({ cache: cacheData })}\n\n`)
           );
         }
+
+        // Merge sensitive topic batches — result6b/6c are "" when using cache (already merged in result6a)
+        const sensitiveTopicsResult = cachedResults
+          ? result6a
+          : [
+              result6a ? `=== SENSITIVE TOPICS BATCH 1 ===\n${result6a}` : "",
+              result6b ? `\n=== SENSITIVE TOPICS BATCH 2 ===\n${result6b}` : "",
+              result6c ? `\n=== SENSITIVE TOPICS BATCH 3 ===\n${result6c}` : "",
+            ].filter(Boolean).join("\n");
 
         const searchResults = [
           "=== PROFESSIONAL & LEGAL SEARCH RESULTS ===",
@@ -774,7 +818,7 @@ async function generateReportAzure(
           result5,
           "",
           "=== SENSITIVE TOPICS CROSS-REFERENCE RESULTS ===",
-          result6,
+          sensitiveTopicsResult,
         ].join("\n");
 
         // Stage 2: Chat Completions streaming — consolidate into report
