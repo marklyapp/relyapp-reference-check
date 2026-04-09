@@ -264,24 +264,20 @@ function generateSearchTerms(input: ApplicantInput): string {
  * Returns the full text output (with inline citations) from the model.
  *
  * @param client      - Configured OpenAI client (pointing at LiteLLM proxy)
- * @param input       - Full text/input to pass to the Responses API
- * @param focusPrompt - The focused search instruction for this call
+ * @param focusPrompt - The focused search instruction for this call (already contains applicant context)
  * @param model       - Model to use (SEARCH_MODEL, default gpt-4.1)
  */
 async function searchWithAzure(
   client: OpenAI,
-  input: string,
   focusPrompt: string,
   model: string
 ): Promise<string> {
-  const fullInput = `${focusPrompt}\n\n${input}`;
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const response = await (client.responses.create as any)({
     model,
     stream: false,
     tools: [{ type: "web_search" }],
-    input: fullInput,
+    input: focusPrompt,
   });
 
   // Extract text from the response output array
@@ -309,7 +305,7 @@ async function searchWithAzure(
     return response.output_text;
   }
 
-  return "";
+  throw new Error(`searchWithAzure: no text extracted from Responses API response. model=${model}`);
 }
 
 // ─── Azure: Stage 2 consolidation prompt ─────────────────────────────────────
@@ -513,9 +509,9 @@ ${applicantCtx}`;
         );
 
         const [result1, result2, result3] = await Promise.all([
-          searchWithAzure(client, applicantCtx, focus1, searchModel),
-          searchWithAzure(client, applicantCtx, focus2, searchModel),
-          searchWithAzure(client, applicantCtx, focus3, searchModel),
+          searchWithAzure(client, focus1, searchModel),
+          searchWithAzure(client, focus2, searchModel),
+          searchWithAzure(client, focus3, searchModel),
         ]);
 
         const searchResults = [
