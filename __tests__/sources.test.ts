@@ -257,6 +257,22 @@ describe('queryElectionsCA', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('503');
   });
+
+  it('GET URL contains a properly encoded comma (not double-encoded %252C)', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(ELECTIONS_CA_SUCCESS_HTML));
+    await queryElectionsCA({ firstName: 'Jane', lastName: 'Smith' });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+    // URLSearchParams encodes "Smith, Jane" → "Smith%2C+Jane" (or similar with %2C)
+    // It must NOT produce double-encoded %252C (which would mean the literal %2C was passed)
+    expect(url).not.toContain('%252C');
+    // The comma must be encoded as %2C (or %2c) in the serialized query string
+    expect(url.toLowerCase()).toContain('%2c');
+    // And the name parts should both be present
+    expect(url).toContain('Smith');
+    expect(url).toContain('Jane');
+  });
 });
 
 // ─── queryLobbyistRegistry ────────────────────────────────────────────────────

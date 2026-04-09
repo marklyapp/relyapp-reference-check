@@ -247,7 +247,7 @@ export async function queryElectionsAB(
   const html = await res.text();
 
   // Check for "no records" message
-  if (/no record/i.test(html) && !/<TBODY/i.test(html)) {
+  if (/no record/i.test(html)) {
     return {
       source: 'Elections Alberta',
       url: ELECTIONS_AB_PUBLIC_URL,
@@ -321,7 +321,7 @@ export async function queryElectionsCA(
   // Elections Canada uses a query-string GET interface in addition to the form POST.
   // Attempt both patterns for resilience.
   const params = new URLSearchParams({
-    ContributorName: `${input.lastName}%2C ${input.firstName}`.trim(),
+    ContributorName: `${input.lastName}, ${input.firstName}`.trim(),
     ReportOption: '5',
     returnStatus: '1',
   });
@@ -610,7 +610,7 @@ function extractApexFields(html: string): ApexFields {
 function extractCookies(setCookieHeader: string): string {
   // Parse Set-Cookie header(s) into a Cookie: name=value; name2=value2 string
   return setCookieHeader
-    .split(',')
+    .split(/,(?=[^ ])/)
     .map((c) => c.split(';')[0]?.trim())
     .filter(Boolean)
     .join('; ');
