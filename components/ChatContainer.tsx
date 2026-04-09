@@ -5,6 +5,7 @@ import ChatMessage, { Message, MessageRole } from './ChatMessage'
 import ChatInput from './ChatInput'
 import WelcomeState from './WelcomeState'
 import { useReferenceCheck } from '@/hooks/useReferenceCheck'
+import { markdownToDocx } from '@/lib/docx'
 
 type ConversationStep =
   | 'intro'
@@ -78,6 +79,16 @@ function sanitiseInput(text: string): string {
   return text.trim()
 }
 
+/**
+ * Slugify a person name for use in a filename.
+ */
+function slugifyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ChatContainer() {
@@ -85,6 +96,9 @@ export default function ChatContainer() {
   const [step, setStep] = useState<ConversationStep>('await_name')
   const [info, setInfo] = useState<SubjectInfo>({})
   const [hasStarted, setHasStarted] = useState(false)
+  // Track the message ID of the active report and whether the report is ready to download
+  const [reportMsgId, setReportMsgId] = useState<string | null>(null)
+  const [reportReady, setReportReady] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const { isRunning, runCheck, cancel } = useReferenceCheck()
@@ -103,8 +117,42 @@ export default function ChatContainer() {
     setMessages((prev) => [...prev, msg])
   }, [])
 
+  /**
+   * Trigger a browser download of the report as a .docx file.
+   */
+  const handleDownloadDocx = useCallback(
+    async (msgId: string, subjectName: string) => {
+      // Find the current report content from messages
+      setMessages((prev) => {
+        const msg = prev.find((m) => m.id === msgId)
+        if (!msg) return prev
+        // Fire the download asynchronously
+        markdownToDocx(msg.content, subjectName)
+          .then((blob) => {
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${slugifyName(subjectName)}-background-check.docx`
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            setTimeout(() => URL.revokeObjectURL(url), 10000)
+          })
+          .catch((err) => {
+            console.error('Failed to generate .docx:', err)
+          })
+        return prev
+      })
+    },
+    []
+  )
+
   const triggerCheck = useCallback(
     (collectedInfo: SubjectInfo) => {
+      // Reset report state for a new check
+      setReportMsgId(null)
+      setReportReady(false)
+
       runCheck(
         {
           name: collectedInfo.name ?? '',
@@ -115,6 +163,7 @@ export default function ChatContainer() {
         },
         {
           onStart: (msgId, loadingMsg) => {
+            setReportMsgId(msgId)
             setMessages((prev) => [...prev, { ...loadingMsg, id: msgId }])
           },
           onChunk: (msgId, chunk) => {
@@ -131,8 +180,20 @@ export default function ChatContainer() {
               return next
             })
           },
-          onComplete: (_msgId) => {
-            // Done
+          onComplete: (msgId) => {
+            setReportReady(true)
+            // Attach the download handler to the report message
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.id === msgId)
+              if (idx === -1) return prev
+              const next = [...prev]
+              next[idx] = {
+                ...next[idx],
+                onDownloadDocx: () =>
+                  handleDownloadDocx(msgId, collectedInfo.name ?? 'report'),
+              }
+              return next
+            })
           },
           onError: (msgId, errorMsg) => {
             const msgWithRetry: Message = {
@@ -152,7 +213,7 @@ export default function ChatContainer() {
       )
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runCheck]
+    [runCheck, handleDownloadDocx]
   )
 
   // Use a ref so the retry callback always captures the latest triggerCheck/isRunning
@@ -270,6 +331,11 @@ export default function ChatContainer() {
   const isComplete = step === 'complete'
   const inputDisabled = isComplete || isRunning
   const showWelcome = messages.length === 0
+
+  // Suppress unused variable warnings — reportMsgId and reportReady are
+  // consumed indirectly via the message objects' onDownloadDocx callbacks.
+  void reportMsgId
+  void reportReady
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">

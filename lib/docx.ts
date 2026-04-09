@@ -2,7 +2,7 @@
  * lib/docx.ts
  * Converts a markdown background-check report to a .docx Blob using the `docx` package.
  *
- * refs #11
+ * refs #11, #44
  */
 
 import {
@@ -15,23 +15,31 @@ import {
   LevelFormat,
   convertInchesToTwip,
   INumberingOptions,
+  ExternalHyperlink,
 } from 'docx'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DocxChild = Paragraph
 
-// ─── Inline markdown → TextRun[] ─────────────────────────────────────────────
+// ─── Inline markdown → TextRun[] / hyperlinks ────────────────────────────────
 
 /**
- * Parse a single line of inline markdown into an array of TextRun objects.
- * Handles **bold**, *italic*, `code`, and plain text.
+ * Parse a single line of inline markdown into an array of TextRun / ExternalHyperlink objects.
+ * Handles **bold**, *italic*, `code`, [text](url), bare https:// URLs, and plain text.
  */
-function parseInline(text: string): TextRun[] {
-  const runs: TextRun[] = []
+function parseInline(text: string): (TextRun | ExternalHyperlink)[] {
+  const runs: (TextRun | ExternalHyperlink)[] = []
 
-  // Combined regex for **bold**, *italic*, `code`
-  const pattern = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g
+  // Combined regex:
+  // 1. [text](url)  — markdown link
+  // 2. bare https?://... URL
+  // 3. **bold**
+  // 4. *italic*
+  // 5. `code`
+  const pattern =
+    /(\[([^\]]+)\]\((https?:\/\/[^\)]+)\))|(https?:\/\/[^\s\)\],>]+)|(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g
+
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -41,15 +49,44 @@ function parseInline(text: string): TextRun[] {
       runs.push(new TextRun({ text: text.slice(lastIndex, match.index) }))
     }
 
-    if (match[2] !== undefined) {
+    if (match[1]) {
+      // [text](url) — markdown link
+      const linkText = match[2]
+      const linkUrl = match[3]
+      runs.push(
+        new ExternalHyperlink({
+          link: linkUrl,
+          children: [
+            new TextRun({
+              text: linkText,
+              style: 'Hyperlink',
+            }),
+          ],
+        })
+      )
+    } else if (match[4]) {
+      // bare URL
+      const url = match[4]
+      runs.push(
+        new ExternalHyperlink({
+          link: url,
+          children: [
+            new TextRun({
+              text: url,
+              style: 'Hyperlink',
+            }),
+          ],
+        })
+      )
+    } else if (match[6] !== undefined) {
       // **bold**
-      runs.push(new TextRun({ text: match[2], bold: true }))
-    } else if (match[3] !== undefined) {
+      runs.push(new TextRun({ text: match[6], bold: true }))
+    } else if (match[7] !== undefined) {
       // *italic*
-      runs.push(new TextRun({ text: match[3], italics: true }))
-    } else if (match[4] !== undefined) {
+      runs.push(new TextRun({ text: match[7], italics: true }))
+    } else if (match[8] !== undefined) {
       // `code`
-      runs.push(new TextRun({ text: match[4], font: 'Courier New', size: 20 }))
+      runs.push(new TextRun({ text: match[8], font: 'Courier New', size: 20 }))
     }
 
     lastIndex = pattern.lastIndex
@@ -78,8 +115,48 @@ function markdownToParagraphs(markdown: string): DocxChild[] {
   const lines = markdown.split('\n')
   const paragraphs: DocxChild[] = []
 
+  // Simple table detection state
+  let inTable = false
+  let tableLines: string[] = []
+
+  function flushTable() {
+    if (tableLines.length === 0) return
+    // Render table rows as plain paragraphs (one per row, cells tab-separated)
+    for (const row of tableLines) {
+      const cells = row
+        .split('|')
+        .map((c) => c.trim())
+        .filter(Boolean)
+      if (cells.length === 0) continue
+      // Skip separator rows like |---|---|
+      if (cells.every((c) => /^[-:]+$/.test(c))) continue
+      paragraphs.push(
+        new Paragraph({
+          children: cells.flatMap((cell, i) => {
+            const runs: (TextRun | ExternalHyperlink)[] = parseInline(cell)
+            if (i < cells.length - 1) {
+              runs.push(new TextRun({ text: '\t' }))
+            }
+            return runs
+          }),
+        })
+      )
+    }
+    tableLines = []
+    inTable = false
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
+
+    // Table row detection
+    if (/^\s*\|/.test(raw)) {
+      inTable = true
+      tableLines.push(raw)
+      continue
+    } else if (inTable) {
+      flushTable()
+    }
 
     // ATX headings: # ## ###
     const headingMatch = raw.match(/^(#{1,6})\s+(.+)$/)
@@ -144,6 +221,9 @@ function markdownToParagraphs(markdown: string): DocxChild[] {
       })
     )
   }
+
+  // Flush any trailing table
+  if (inTable) flushTable()
 
   return paragraphs
 }

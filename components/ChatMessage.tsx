@@ -14,6 +14,8 @@ export interface Message {
   status?: MessageStatus
   /** If set, a retry button is shown for error messages */
   onRetry?: () => void
+  /** If set, a download .docx button is shown for completed report messages */
+  onDownloadDocx?: () => void
 }
 
 interface ChatMessageProps {
@@ -85,6 +87,25 @@ export default function ChatMessage({ message }: ChatMessageProps) {
               />
             </svg>
             Retry
+          </button>
+        )}
+
+        {!isError && !isUser && message.onDownloadDocx && (
+          <button
+            onClick={message.onDownloadDocx}
+            className="mt-2 ml-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-medium transition-colors border border-blue-200"
+            aria-label="Download report as Word document"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="w-3.5 h-3.5"
+            >
+              <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614L6.295 8.235a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03l-2.955 3.129V2.75z" />
+              <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z" />
+            </svg>
+            Download .docx
           </button>
         )}
 
