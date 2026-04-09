@@ -20,7 +20,6 @@ import {
   PageNumber,
   Packer,
   Paragraph,
-  SectionType,
   ShadingType,
   Table,
   TableCell,
@@ -581,130 +580,11 @@ export async function markdownToDocx(markdown: string, personName: string): Prom
   })
 
   const h1Title = extractH1(markdown)
-  const recommendation = extractRecommendation(markdown)
   const parsedSections = parseSections(markdown)
   const flagBoxes = parseFlagBoxes(markdown)
 
-  // ── Cover Page Paragraphs ──────────────────────────────────────────────────
-
-  const coverChildren: Paragraph[] = []
-
-  // Vertical spacing at top
-  for (let i = 0; i < 4; i++) {
-    coverChildren.push(new Paragraph({ text: '', spacing: { before: 0, after: 0 } }))
-  }
-
-  // CONFIDENTIAL label
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 480, after: 240 },
-      children: [
-        new TextRun({
-          text: 'CONFIDENTIAL',
-          font: HEADING_FONT,
-          size: 28,
-          color: RED_FLAG,
-          bold: true,
-          characterSpacing: 200,
-        }),
-      ],
-    })
-  )
-
-  // Branding
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 0, after: 480 },
-      children: [
-        new TextRun({
-          text: 'Government of Alberta — Board Applicant Research',
-          font: HEADING_FONT,
-          size: 20,
-          color: DARK_GRAY,
-        }),
-      ],
-    })
-  )
-
-  // Report title
+  // displayTitle used for document metadata only
   const displayTitle = h1Title || `${personName} — Background Check Report`
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 0, after: 240 },
-      children: [
-        new TextRun({
-          text: displayTitle,
-          font: HEADING_FONT,
-          size: 52,
-          color: DARK_BLUE,
-          bold: true,
-        }),
-      ],
-    })
-  )
-
-  // Divider line via border
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 240, after: 240 },
-      border: {
-        bottom: { style: BorderStyle.SINGLE, size: 6, color: DARK_BLUE },
-      },
-      children: [],
-    })
-  )
-
-  // Date
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 240, after: 120 },
-      children: [
-        new TextRun({ text: `Date Prepared: ${dateStr}`, font: HEADING_FONT, size: 22, color: DARK_GRAY }),
-      ],
-    })
-  )
-
-  // Recommendation
-  if (recommendation) {
-    const recLower = recommendation.toLowerCase()
-    let recColor = DARK_BLUE
-    if (recLower.includes('do not') || recLower.includes('caution')) recColor = RED_FLAG
-    else if (recLower.includes('proceed')) recColor = '006400'
-
-    coverChildren.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 240, after: 120 },
-        children: [
-          new TextRun({ text: 'Recommendation: ', font: HEADING_FONT, size: 26, color: DARK_GRAY }),
-          new TextRun({ text: recommendation, font: HEADING_FONT, size: 26, color: recColor, bold: true }),
-        ],
-      })
-    )
-  }
-
-  // Confidentiality notice
-  coverChildren.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 480, after: 0 },
-      children: [
-        new TextRun({
-          text: 'This document is confidential and intended solely for authorized use. ' +
-            'Unauthorized disclosure, copying, or distribution is prohibited.',
-          font: BODY_FONT,
-          size: 16,
-          color: DARK_GRAY,
-          italics: true,
-        }),
-      ],
-    })
-  )
 
   // ── Main Body Content ──────────────────────────────────────────────────────
 
@@ -837,16 +717,7 @@ export async function markdownToDocx(markdown: string, personName: string): Prom
       },
     },
     sections: [
-      // Section 1: Cover page (no header/footer)
-      {
-        properties: {
-          page: { margin: pageMargin },
-          type: SectionType.NEXT_PAGE,
-          titlePage: true,
-        },
-        children: coverChildren,
-      },
-      // Section 2: Body with headers/footers
+      // Single section: Body with headers/footers (no cover page)
       {
         headers: {
           default: defaultHeader,
