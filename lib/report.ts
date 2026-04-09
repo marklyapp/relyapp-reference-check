@@ -6,7 +6,7 @@
  * Supports two code paths:
  *  - azure: Two-stage pipeline:
  *      Stage 1 — 3 parallel web searches via Responses API (SEARCH_MODEL / gpt-4.1)
- *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / gpt-5.4-pro)
+ *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / gpt-5.4)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
  * refs #6, #30, #34, #36
@@ -51,7 +51,7 @@ export interface GenerateReportOptions {
 
 /**
  * Returns true if the model does not support the temperature parameter.
- * gpt-5 models (e.g. gpt-5.4-pro) only accept temperature=1 via the API,
+ * gpt-5 models (e.g. gpt-5.4) only accept temperature=1 via the API,
  * so we omit temperature entirely to avoid UnsupportedParamsError.
  */
 export function shouldOmitTemperature(model: string | undefined): boolean {
@@ -700,7 +700,7 @@ async function generateReportChatCompletions(
  *
  * Routes to the correct implementation based on SEARCH_API_PROVIDER:
  *  - 'azure': Two-stage pipeline — 3 parallel gpt-4.1 web searches (SEARCH_MODEL)
- *             then gpt-5.4-pro consolidation via Chat Completions (REPORT_MODEL)
+ *             then gpt-5.4 consolidation via Chat Completions (REPORT_MODEL)
  *  - 'serp' | 'brave': Uses Chat Completions with pre-fetched researchData
  *
  * @param input - Applicant data and raw research content
