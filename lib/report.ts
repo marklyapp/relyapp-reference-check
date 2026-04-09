@@ -9,7 +9,7 @@
  *      Stage 2 — Report consolidation via Chat Completions streaming (REPORT_MODEL / claude-opus-4-6)
  *  - serp/brave: Uses Chat Completions API with pre-fetched research data
  *
- * refs #6, #30, #34, #36, #46
+ * refs #6, #30, #34, #36, #45, #46
  */
 
 import OpenAI from "openai";
@@ -83,6 +83,80 @@ export function resolveTemperature(
   return 0.3;
 }
 
+// ─── Sensitive Topics List ────────────────────────────────────────────────────
+// refs #45: Added to Stage 2 consolidation prompt (azure) and serp/brave path.
+
+export const SENSITIVE_TOPICS_LIST = `SENSITIVE TOPICS TO FLAG — check ALL search results for any mention of or connection to:
+
+POLITICIANS & POLITICAL FIGURES:
+- Politicians and political parties from the last 100 years (all English-speaking countries, all levels of government)
+- Current Calgary or Edmonton Councillors/mayors
+- Notable non-English figures: Hitler, Stalin, Mao, Putin, Zelensky, Xi Jinping
+
+LEGAL & LEGISLATIVE:
+- Any judicial decision
+- Any federal or provincial legislation/bills
+- Any existing Alberta public agencies (public-agency-list.alberta.ca)
+
+IDEOLOGIES:
+- Fascism, Communism, Socialism, Nationalism, Conservatism, Liberalism, Feminism, Environmentalism
+
+POLITICAL ISSUES:
+- Israel/Palestine, Emissions Regulation, Carbon Tax, COP conferences
+- United Nations, Davos, World Economic Forum
+- Residential schools, 2SLGBTQI+, Diversity/Equity/Inclusion
+- Pipelines, Equalization, Sovereignty, Tariffs
+- NATO, CUSMA, Iran War, Guns/Gun control
+
+HEALTH POLICY:
+- Mental Health/addiction, Supervised Consumption, Recovery, Safe Supply, MAID
+- Immigration, Housing Costs, Affordability, COVID-19
+- AHS restructuring, Public vs private healthcare
+- Ambulance response times, Alberta Medical Association
+- Emergency room wait times, Family doctor availability, Hospital bed space
+
+EDUCATION:
+- Teachers strike, Classroom sizes/complexity, Teacher pay
+- Alberta Teachers' Association, K-12 Curriculum
+- University Tuition, International Students, Arts Funding
+
+ENERGY & ENVIRONMENT:
+- Electricity/Water rates, Cell phone rates
+- Fertilizer Regulation/Nitrogen Oxide emissions, Methane Emissions
+- Alberta Energy Regulator, Canadian Energy Regulator
+- Coal mining, Oil, Gas, Wind, Solar, Nuclear (any resource industry)
+- Forest fire management, Logging industry
+
+SOCIAL ISSUES:
+- Missing and murdered indigenous women
+- Truth and reconciliation
+- Temporary Foreign Worker Program
+- Mandatory Minimum sentences
+- Property Tax, Transit, Policing, Pension, AISH`;
+
+// ─── Sensitive Topics Flagging Instructions ───────────────────────────────────
+
+const SENSITIVE_TOPICS_INSTRUCTIONS = `
+SENSITIVE TOPICS FLAGGING (refs #45):
+After the NOTABLE ITEMS section, add a ## SENSITIVE TOPICS FLAGGED section.
+Cross-reference ALL search results against the sensitive topics list above and flag any matches.
+
+Output the section as a markdown table:
+
+## SENSITIVE TOPICS FLAGGED
+
+| Category | Topic | Finding | Source |
+|----------|-------|---------|--------|
+| Political Party | United Conservative Party | Leader of Wildrose, merged into UCP | https://... |
+| Energy | Oil & Gas Industry | Serves as Minister of Energy and Minerals | https://... |
+| Pipelines | Trans Mountain | Publicly advocated for pipeline expansion | https://... |
+
+If NO sensitive topics are found in the search results, the section should contain only:
+"No sensitive topics identified in search results."
+
+The Category column must use one of: Politicians, Political Party, Legal/Legislative, Ideology, Political Issue, Health Policy, Education, Energy/Environment, Social Issue.
+`;
+
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(): string {
@@ -99,7 +173,10 @@ Report Format Rules:
 - Use "Do Not Proceed" only for serious concerns (criminal history, extreme content)
 - SCHEDULES only include posts/content that are flagged as notable or sensitive
 - SOURCES/CHECKLIST uses checkmarks (✓) for sources that were searched
-- SEARCH TERMS uses OR/AND operators with name variations`;
+- SEARCH TERMS uses OR/AND operators with name variations
+
+${SENSITIVE_TOPICS_LIST}
+${SENSITIVE_TOPICS_INSTRUCTIONS}`;
 }
 
 // ─── Report Prompt (serp/brave path) ─────────────────────────────────────────
@@ -135,6 +212,14 @@ NOTABLE ITEMS
 - [Key finding 1]
 - [Key finding 2]
 - [Add more as needed, or "None identified" if nothing notable]
+
+## SENSITIVE TOPICS FLAGGED
+
+| Category | Topic | Finding | Source |
+|----------|-------|---------|--------|
+| [Category] | [Topic matched from sensitive topics list] | [What was found] | [URL] |
+
+(If no sensitive topics found: "No sensitive topics identified in search results.")
 
 PERSONAL INFORMATION
 [Role/occupation description and any demographic details found in the research data]
@@ -366,6 +451,9 @@ Below are raw web search results gathered about the applicant. Consolidate them 
 
 IMPORTANT: Every finding must cite a source URL. The SOURCES section must list every URL actually found. Do not list sources you didn't find.
 
+${SENSITIVE_TOPICS_LIST}
+${SENSITIVE_TOPICS_INSTRUCTIONS}
+
 APPLICANT: ${input.name}
 LOCATION: ${input.location}
 ${input.role ? `ROLE: ${input.role}` : ""}
@@ -390,6 +478,14 @@ Recommendation: [Proceed / Caution / Do Not Proceed]
 NOTABLE ITEMS
 - [Key finding 1, with source URL]
 - [Add more as needed, or "None identified" if nothing notable]
+
+## SENSITIVE TOPICS FLAGGED
+
+| Category | Topic | Finding | Source |
+|----------|-------|---------|--------|
+| [Category] | [Topic matched from sensitive topics list] | [What was found] | [URL] |
+
+(If no sensitive topics found: "No sensitive topics identified in search results.")
 
 PERSONAL INFORMATION
 [Role/occupation description and any demographic details found. Cite sources.]
@@ -784,7 +880,8 @@ async function generateReportChatCompletions(
 /**
  * Generates a structured background check report via OpenAI streaming.
  *
- * Routes to the correct implementation based on SEARCH_API_PROVIDER *  - 'azure': Two-stage pipeline — 5 parallel gpt-4.1 web searches (SEARCH_MODEL)
+ * Routes to the correct implementation based on SEARCH_API_PROVIDER
+ *  - 'azure': Two-stage pipeline — 5 parallel gpt-4.1 web searches (SEARCH_MODEL)
  *             then consolidation via Chat Completions streaming (REPORT_MODEL)
  *  - 'serp' | 'brave': Uses Chat Completions with pre-fetched researchData
  *
