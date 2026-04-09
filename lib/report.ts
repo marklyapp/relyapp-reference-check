@@ -550,11 +550,19 @@ ${applicantCtx}`;
           )
         );
 
-        const [result1, result2, result3] = await Promise.all([
-          searchWithAzure(client, focus1, searchModel),
-          searchWithAzure(client, focus2, searchModel),
-          searchWithAzure(client, focus3, searchModel),
-        ]);
+        const keepalive = setInterval(() => {
+          try { controller.enqueue(encoder.encode(':\n\n')); } catch {}
+        }, 5000);
+        let result1: string, result2: string, result3: string;
+        try {
+          [result1, result2, result3] = await Promise.all([
+            searchWithAzure(client, focus1, searchModel),
+            searchWithAzure(client, focus2, searchModel),
+            searchWithAzure(client, focus3, searchModel),
+          ]);
+        } finally {
+          clearInterval(keepalive);
+        }
 
         const searchResults = [
           "=== GENERAL SEARCH RESULTS ===",
