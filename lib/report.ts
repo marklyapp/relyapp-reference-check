@@ -569,6 +569,18 @@ Each section below MUST appear in the report. State "No records found" or "No pr
 SOURCES
 [List every URL you actually searched and found results from. Include the site name and URL for each. Do not list sources you didn't actually search.]
 
+SOURCES/CHECKLIST
+✓ Professional Discipline (Law Society of Alberta, Real Estate Council of Alberta, APEGA)
+✓ Elections AB contributor search (quarterly, annual, leadership, nomination, third-party ads)
+✓ Elections Canada donation database
+✓ Google (search terms listed below)
+✓ LinkedIn (Resume Info, Top Interests, Posts, Comments, Reactions)
+✓ Twitter/X (Tweets, Replies, Media, Following, Username)
+✓ Facebook (Friends, Photos, About Info, Likes/Events, Posts, Username)
+✓ Instagram (Posts and comments, Tagged Posts, Reels, Following, Username)
+✓ YouTube
+✓ CanLii (Canadian Legal Information Institute)
+
 SEARCH TERMS
 ${searchTerms}
 ${generatedTermsSection}
