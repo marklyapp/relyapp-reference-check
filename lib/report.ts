@@ -421,6 +421,10 @@ function buildConsolidationPrompt(
   return `You are a Board Applicant Research Assistant for the Government of Alberta Executive Council.
 Below are raw web search results gathered about the applicant. Consolidate them into a structured background check report.
 
+Search the entire internet — do not limit yourself to any predefined list of sources. Use web_search extensively to find all relevant information.
+
+Every fact, finding, or piece of information in the report MUST include a source URL citation in parentheses, e.g. (https://example.com). Never state a finding without citing where you found it.
+
 IMPORTANT: In the SENSITIVE TOPICS FLAGGED table, use SHORT source labels (e.g. "Wikipedia", "CBC News", "GoA", "Elections AB") instead of full URLs. Full URLs go in the SOURCES section.
 
 Use emoji prefixes for severity in the SENSITIVE TOPICS FLAGGED table Category column:
@@ -563,23 +567,13 @@ Each section below MUST appear in the report. State "No records found" or "No pr
 --- END MANDATORY SECTIONS ---
 
 SOURCES
-[List every URL actually found during the search. Do not list sources you didn't find.]
-
-SOURCES/CHECKLIST
-✓ Professional Discipline (Law Society of Alberta, Real Estate Council of Alberta, APEGA)
-✓ Elections AB contributor search (quarterly, annual, leadership, nomination, third-party ads)
-✓ Elections Canada donation database
-✓ Google (search terms listed below)
-✓ LinkedIn (Resume Info, Top Interests, Posts, Comments, Reactions)
-✓ Twitter/X (Tweets, Replies, Media, Following, Username)
-✓ Facebook (Friends, Photos, About Info, Likes/Events, Posts, Username)
-✓ Instagram (Posts and comments, Tagged Posts, Reels, Following, Username)
-✓ YouTube
-✓ CanLii (Canadian Legal Information Institute)
+[List every URL you actually searched and found results from. Include the site name and URL for each. Do not list sources you didn't actually search.]
 
 SEARCH TERMS
 ${searchTerms}
-${generatedTermsSection}`;
+${generatedTermsSection}
+
+Search beyond these suggested terms as needed to be thorough. Use any relevant search queries to find comprehensive information.`;
 }
 
 // ─── Azure: generateReportAzure (Two-stage pipeline) ─────────────────────────
